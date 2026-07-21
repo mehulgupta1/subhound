@@ -346,6 +346,16 @@ func runPipeline(cfg config, domain string) int {
 	logf(cfg.silent, "%s[✓]%s done — all:%d  resolved:%d  alive:%d", bold, reset, len(all), len(resolved), aliveCount)
 	logf(cfg.silent, "    results in %s/", dir)
 
+	// 0 results is almost always a mode issue, not a real "nothing exists" — say why
+	// so an empty scan never looks like a silent failure.
+	if len(all) == 0 {
+		if !cfg.passive {
+			logf(cfg.silent, "  %s⚠%s  0 subdomains — passive is OFF (-no-passive), which is the main source. For a normal scan:  subhound -d %s", red(), reset, domain)
+		} else {
+			logf(cfg.silent, "  %s⚠%s  0 subdomains — the enabled stages found nothing. Try more sources:  subhound -d %s -all -brute", red(), reset, domain)
+		}
+	}
+
 	// silent mode: bare subdomain list to stdout (pipe-friendly)
 	if cfg.silent {
 		src := all
