@@ -1,0 +1,362 @@
+package main
+
+// Step 2 — setup / auto-installer (Linux & macOS only).
+// `subhound -setup` ensures Go exists, then installs each recon tool it calls by
+// name. Idempotent (only installs what's missing), fail-soft (one optional tool
+// failing never aborts the rest). Findomain is a release zip; the rest go install.
+
+import (
+	"archive/zip"
+	"bufio"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+// runConfig interactively stores API keys where the tools read them:
+// subfinder's provider-config.yaml, plus hints for the env-var-based tools.
+func runConfig() int {
+	r := bufio.NewReader(os.Stdin)
+	ask := func(label string) string {
+		fmt.Fprintf(os.Stderr, "  %-22s: ", label)
+		s, _ := r.ReadString('\n')
+		return strings.TrimSpace(s)
+	}
+	fmt.Fprintln(os.Stderr, "[*] SubHound config — enter API keys (blank to skip)")
+	chaos := ask("Chaos / PDCP key")
+	github := ask("GitHub token")
+	st := ask("SecurityTrails key")
+	vt := ask("VirusTotal key")
+
+	// subfinder provider-config.yaml
+	var b strings.Builder
+	add := func(name, val string) {
+		if val != "" {
+			fmt.Fprintf(&b, "%s:\n  - %s\n", name, val)
+		}
+	}
+	add("chaos", chaos)
+	add("github", github)
+	add("securitytrails", st)
+	add("virustotal", vt)
+
+	home, _ := os.UserHomeDir()
+	cfgDir := filepath.Join(home, ".config", "subfinder")
+	os.MkdirAll(cfgDir, 0o755)
+	path := filepath.Join(cfgDir, "provider-config.yaml")
+	if b.Len() > 0 {
+		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "[!] cannot write %s: %v\n", path, err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "[✓] wrote %s\n", path)
+	} else {
+		fmt.Fprintln(os.Stderr, "[*] no keys entered — nothing written")
+		return 0
+	}
+
+	// env-var-based tools need exports (persist them in your shell rc)
+	fmt.Fprintln(os.Stderr, "\n[*] also add these to your shell (~/.bashrc or ~/.zshrc):")
+	if github != "" {
+		fmt.Fprintf(os.Stderr, "      export GITHUB_TOKEN=%s\n", github)
+	}
+	if chaos != "" {
+		fmt.Fprintf(os.Stderr, "      export PDCP_API_KEY=%s   # enables ASN (asnmap)\n", chaos)
+	}
+	return 0
+}
+
+type tool struct {
+	cmd      string // command name the pipeline calls
+	pkg      string // `go install` path
+	required bool
+}
+
+var tools = []tool{
+	{"subfinder", "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", true},
+	{"dnsx", "github.com/projectdiscovery/dnsx/cmd/dnsx@latest", true},
+	{"httpx", "github.com/projectdiscovery/httpx/cmd/httpx@latest", true},
+	{"anew", "github.com/tomnomnom/anew@latest", true},
+	{"asnmap", "github.com/projectdiscovery/asnmap/cmd/asnmap@latest", true},
+	{"mapcidr", "github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest", true},
+	{"assetfinder", "github.com/tomnomnom/assetfinder@latest", false},
+	{"alterx", "github.com/projectdiscovery/alterx/cmd/alterx@latest", false},
+	{"github-subdomains", "github.com/gwen001/github-subdomains@latest", false},
+	{"tlsx", "github.com/projectdiscovery/tlsx/cmd/tlsx@latest", false},
+	{"ffuf", "github.com/ffuf/ffuf/v2@latest", false},
+}
+
+// requiredTools is the minimal set the pipeline needs to run at all.
+func requiredCmds() []string {
+	var r []string
+	for _, t := range tools {
+		if t.required {
+			r = append(r, t.cmd)
+		}
+	}
+	return r
+}
+
+// runSetup is the entry for `-setup`. Installs Go + tools, reports a summary.
+func runSetup() int {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		fmt.Fprintf(os.Stderr, "[!] SubHound supports Linux and macOS only (got %s)\n", runtime.GOOS)
+		return 1
+	}
+
+	goExe, err := ensureGo()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Go is required but could not be installed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "    install Go manually from https://go.dev/dl/ then re-run -setup")
+		return 1
+	}
+	gobin := goBinDir(goExe)
+	prependPath(gobin)
+	prependPath(filepath.Dir(goExe))
+
+	fmt.Fprintf(os.Stderr, "[*] Go: %s\n", goExe)
+	fmt.Fprintf(os.Stderr, "[*] tools install to: %s\n\n", gobin)
+
+	var failed []string
+	for _, t := range tools {
+		if p := resolveCmd(t.cmd, gobin); p != "" {
+			fmt.Fprintf(os.Stderr, "  ✓ %-18s already installed\n", t.cmd)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  … installing %s\n", t.cmd)
+		if err := goInstall(goExe, t.pkg); err != nil || resolveCmd(t.cmd, gobin) == "" {
+			tag := "optional"
+			if t.required {
+				tag = "REQUIRED"
+			}
+			fmt.Fprintf(os.Stderr, "  ✗ %-18s failed (%s): %v\n", t.cmd, tag, err)
+			failed = append(failed, t.cmd)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  ✓ %-18s installed\n", t.cmd)
+	}
+
+	// findomain — release zip, not go install (optional)
+	if resolveCmd("findomain", gobin) == "" {
+		fmt.Fprintf(os.Stderr, "  … installing findomain (release binary)\n")
+		if err := installFindomain(gobin); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %-18s failed (optional): %v\n", "findomain", err)
+			failed = append(failed, "findomain")
+		} else {
+			fmt.Fprintf(os.Stderr, "  ✓ %-18s installed\n", "findomain")
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  ✓ %-18s already installed\n", "findomain")
+	}
+
+	fmt.Fprintln(os.Stderr)
+	// abort only if a REQUIRED tool failed
+	var reqFailed []string
+	for _, f := range failed {
+		for _, t := range tools {
+			if t.cmd == f && t.required {
+				reqFailed = append(reqFailed, f)
+			}
+		}
+	}
+	if len(reqFailed) > 0 {
+		fmt.Fprintf(os.Stderr, "[!] setup incomplete — required tools failed: %s\n", strings.Join(reqFailed, ", "))
+		return 1
+	}
+
+	writeMarker(gobin)
+	if len(failed) > 0 {
+		fmt.Fprintf(os.Stderr, "[✓] setup done (optional skipped: %s)\n", strings.Join(failed, ", "))
+	} else {
+		fmt.Fprintln(os.Stderr, "[✓] setup complete — all tools installed")
+	}
+	fmt.Fprintf(os.Stderr, "    NOTE: add %s to your PATH if not already:\n", gobin)
+	fmt.Fprintf(os.Stderr, "      export PATH=\"$PATH:%s\"\n", gobin)
+	return 0
+}
+
+// ensureGo returns a working go binary path, installing Go if missing.
+func ensureGo() (string, error) {
+	if p, err := exec.LookPath("go"); err == nil {
+		return p, nil
+	}
+	if fileExists("/usr/local/go/bin/go") {
+		return "/usr/local/go/bin/go", nil
+	}
+	fmt.Fprintln(os.Stderr, "[*] Go not found — installing via udhos/update-golang …")
+	script := filepath.Join(os.TempDir(), "update-golang.sh")
+	if err := download("https://raw.githubusercontent.com/udhos/update-golang/master/update-golang.sh", script); err != nil {
+		return "", fmt.Errorf("download installer: %w", err)
+	}
+	defer os.Remove(script)
+
+	name, args := "bash", []string{script}
+	if os.Geteuid() != 0 {
+		if _, err := exec.LookPath("sudo"); err == nil {
+			name, args = "sudo", []string{"bash", script}
+		}
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "SOURCE_ONLY=") // non-interactive
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		// update-golang can return non-zero yet still install; fall through to check
+		fmt.Fprintf(os.Stderr, "[*] installer exited: %v (checking anyway)\n", err)
+	}
+	if fileExists("/usr/local/go/bin/go") {
+		return "/usr/local/go/bin/go", nil
+	}
+	if p, err := exec.LookPath("go"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("go still not found after install")
+}
+
+func goInstall(goExe, pkg string) error {
+	cmd := exec.Command(goExe, "install", pkg)
+	cmd.Env = append(os.Environ(), "GO111MODULE=on", "CGO_ENABLED=0")
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	return cmd.Run()
+}
+
+func goBinDir(goExe string) string {
+	if out, err := exec.Command(goExe, "env", "GOBIN").Output(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return s
+		}
+	}
+	if out, err := exec.Command(goExe, "env", "GOPATH").Output(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return filepath.Join(s, "bin")
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "go", "bin")
+}
+
+// resolveCmd returns a path for cmd if it exists on PATH or in gobin, else "".
+func resolveCmd(cmd, gobin string) string {
+	if p, err := exec.LookPath(cmd); err == nil {
+		return p
+	}
+	p := filepath.Join(gobin, cmd)
+	if fileExists(p) {
+		return p
+	}
+	return ""
+}
+
+// installFindomain downloads + extracts the right release binary for this OS/arch.
+func installFindomain(gobin string) error {
+	asset := findomainAsset()
+	if asset == "" {
+		return fmt.Errorf("no findomain asset for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	url := "https://github.com/findomain/findomain/releases/latest/download/" + asset
+	zipPath := filepath.Join(os.TempDir(), asset)
+	if err := download(url, zipPath); err != nil {
+		return err
+	}
+	defer os.Remove(zipPath)
+	if err := os.MkdirAll(gobin, 0o755); err != nil {
+		return err
+	}
+	// extract the single `findomain` binary from the zip (no system unzip needed)
+	return unzipBinary(zipPath, "findomain", filepath.Join(gobin, "findomain"))
+}
+
+func findomainAsset() string {
+	switch runtime.GOOS {
+	case "linux":
+		switch runtime.GOARCH {
+		case "amd64":
+			return "findomain-linux.zip"
+		case "arm64":
+			return "findomain-aarch64.zip"
+		case "386":
+			return "findomain-linux-i386.zip"
+		}
+	case "darwin":
+		switch runtime.GOARCH {
+		case "arm64":
+			return "findomain-osx-arm64.zip"
+		case "amd64":
+			return "findomain-osx-x86_64.zip"
+		}
+	}
+	return ""
+}
+
+func writeMarker(gobin string) {
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".subhound")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, ".setup-done"), []byte(gobin+"\n"), 0o644)
+}
+
+// --- helpers ---
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func prependPath(dir string) {
+	if dir == "" {
+		return
+	}
+	cur := os.Getenv("PATH")
+	if !strings.Contains(cur, dir) {
+		os.Setenv("PATH", dir+string(os.PathListSeparator)+cur)
+	}
+}
+
+func download(url, dst string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
+	}
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+// unzipBinary extracts the entry whose base name == wantName into dstPath (chmod +x).
+func unzipBinary(zipPath, wantName, dstPath string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if filepath.Base(f.Name) != wantName {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		out, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		_, err = io.Copy(out, rc)
+		return err
+	}
+	return fmt.Errorf("%s not found inside %s", wantName, zipPath)
+}

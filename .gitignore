@@ -1,0 +1,20 @@
+# vendored Go toolchain (huge, machine-specific)
+.gotool/
+
+# build output
+*.exe
+
+# scan output folders + result files
+subhound-*/
+alive.json
+*.log
+
+# safety backups
+*.zip
+
+# local secrets (also stored at ~/.config/subhound/config.json — never in repo)
+config.json
+
+# Claude Code local settings + internal design docs (keep local, not public)
+.claude/
+plan*.md
