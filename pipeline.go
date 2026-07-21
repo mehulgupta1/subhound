@@ -5,6 +5,7 @@ package main
 // in Go; dnsx resolves + strips wildcards.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -54,11 +55,20 @@ func installInterruptHandler() {
 var (
 	hbMu     sync.Mutex   // serializes stderr writes between logf and the ticker
 	hbStage  atomic.Value // string: current stage label
+	hbCount  atomic.Int64 // live result counter for the current stage/sub-phase
 	hbActive bool
 	hbStop   chan struct{}
 )
 
-func setStage(s string) { hbStage.Store(s) }
+// setStage labels the current stage AND resets the live counter, so each stage
+// (or sub-phase) counts from zero.
+func setStage(s string) {
+	hbStage.Store(s)
+	hbCount.Store(0)
+}
+
+// hbBump increments the live counter — called per result line by runStream.
+func hbBump() { hbCount.Add(1) }
 
 func startHeartbeat(silent bool) {
 	if silent || !isTerminal(os.Stderr) {
@@ -81,8 +91,12 @@ func startHeartbeat(silent bool) {
 				return
 			case <-tick.C:
 				s, _ := hbStage.Load().(string)
+				line := fmt.Sprintf("  %c %s… %s elapsed", frames[i%len(frames)], s, fmtElapsed(time.Since(start)))
+				if n := hbCount.Load(); n > 0 {
+					line += fmt.Sprintf(" · %s", commafy(n))
+				}
 				hbMu.Lock()
-				fmt.Fprintf(os.Stderr, "\r\033[K  %c %s… %s elapsed", frames[i%len(frames)], s, fmtElapsed(time.Since(start)))
+				fmt.Fprintf(os.Stderr, "\r\033[K%s", line)
 				hbMu.Unlock()
 			}
 		}
@@ -102,6 +116,27 @@ func fmtElapsed(d time.Duration) string {
 		return fmt.Sprintf("%dm%02ds", m, int(d.Seconds())%60)
 	}
 	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+// commafy renders n with thousands separators (12345 → "12,345").
+func commafy(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre > 0 {
+		b.WriteString(s[:pre])
+		b.WriteByte(',')
+	}
+	for i := pre; i < len(s); i += 3 {
+		b.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
 }
 
 // per-source hard wall-clock cap: a stuck source can't stall the phase.
@@ -415,6 +450,7 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 	var allNew []string
 
 	for iter := 1; iter <= maxPermIters; iter++ {
+		setStage(fmt.Sprintf("permutation r%d · generating", iter))
 		cands := alterxGen(cfg, seeds, dir)
 		if len(cands) == 0 {
 			break
@@ -424,6 +460,7 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 				red(), reset, iter, len(cands), permExplosionCap)
 			break
 		}
+		setStage(fmt.Sprintf("permutation r%d · resolving", iter))
 		var fresh []string
 		for _, n := range dnsxResolveList(cfg, domain, cands, dir) {
 			if n = normalize(n, domain); n != "" && !excl.match(n) {
@@ -763,12 +800,7 @@ func tlsStage(cfg config, domain string, hosts []string, dir string) []string {
 
 // runToolStdinNull runs a tool with stdin closed (so interactive prompts abort).
 func runToolStdinNull(bin string, args ...string) (out []string, stderr string, err error) {
-	cmd := exec.Command(bin, args...)
-	cmd.Stdin = nil // empty stdin → prompts get EOF and bail instead of hanging
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	err = cmd.Run()
-	return splitLines(so.String()), strings.TrimSpace(se.String()), err
+	return runStream(context.Background(), true, bin, args...)
 }
 
 // httpxRec is the subset of httpx JSON we care about.
@@ -853,25 +885,50 @@ func parseDnsxResp(ln string) (host, ip string) {
 	return host, ip
 }
 
+// runStream runs bin and reads stdout line-by-line AS IT ARRIVES, bumping the
+// live counter (hbCount) per result so the heartbeat shows numbers climbing in
+// real time. Empty lines are dropped (matching splitLines). On ctx timeout/cancel
+// the process is killed and whatever was read so far is returned (partial kept).
+// stdinNull closes stdin so a tool that would prompt gets EOF and bails.
+func runStream(ctx context.Context, stdinNull bool, bin string, args ...string) (out []string, stderr string, err error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	if stdinNull {
+		cmd.Stdin = nil
+	}
+	var se bytes.Buffer
+	cmd.Stderr = &se
+	pipe, e := cmd.StdoutPipe()
+	if e != nil {
+		return nil, "", e
+	}
+	if e := cmd.Start(); e != nil {
+		return nil, "", e
+	}
+	sc := bufio.NewScanner(pipe)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024) // some tool lines (httpx -json) are long
+	for sc.Scan() {
+		ln := strings.TrimRight(sc.Text(), "\r")
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		out = append(out, ln)
+		hbBump()
+	}
+	err = cmd.Wait()
+	return out, strings.TrimSpace(se.String()), err
+}
+
 // runTool runs a binary, capturing stdout lines, stderr text, and exit error.
 func runTool(bin string, args ...string) (out []string, stderr string, err error) {
-	cmd := exec.Command(bin, args...)
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	err = cmd.Run()
-	return splitLines(so.String()), strings.TrimSpace(se.String()), err
+	return runStream(context.Background(), false, bin, args...)
 }
 
 // runToolCtx is runTool with a hard timeout; on timeout the process is killed
-// but any stdout captured so far is returned (partial results are kept).
+// but any stdout read so far is returned (partial results are kept).
 func runToolCtx(timeout time.Duration, bin string, args ...string) (out []string, stderr string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, args...)
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	err = cmd.Run()
-	return splitLines(so.String()), strings.TrimSpace(se.String()), err
+	return runStream(ctx, false, bin, args...)
 }
 
 // ---- scope / exclude ----
