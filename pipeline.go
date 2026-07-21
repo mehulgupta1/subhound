@@ -477,7 +477,7 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 		}
 		setStage(fmt.Sprintf("permutation r%d · resolving %s guesses", iter, commafy(int64(len(cands)))))
 		var fresh []string
-		for _, n := range dnsxResolveList(cfg, domain, cands, dir) {
+		for _, n := range shuffledResolve(cfg, domain, cands, dir) {
 			if n = normalize(n, domain); n != "" && !excl.match(n) {
 				if _, ok := seen[n]; !ok {
 					seen[n] = struct{}{}
@@ -544,6 +544,49 @@ func dnsxResolveList(cfg config, domain string, names []string, dir string) []st
 		}
 	}
 	return out
+}
+
+// hasTool reports whether a binary is on PATH.
+func hasTool(bin string) bool { _, err := exec.LookPath(bin); return err == nil }
+
+// bigResolvers returns the LARGE resolver list (Trickest, ~/.subhound/resolvers.txt)
+// for the fast massdns pass; falls back to the trusted/bundled list if absent.
+func bigResolvers(cfg config) string {
+	home, _ := os.UserHomeDir()
+	big := filepath.Join(home, ".subhound", "resolvers.txt")
+	if fileExists(big) {
+		return big
+	}
+	return cfg.resolvers
+}
+
+// shuffledResolve resolves a big candidate list FAST via shuffledns (massdns):
+// the large list (-r) for raw speed + the trusted list (-tr) to verify hits and
+// kill false positives, with shuffledns's own wildcard filtering. Falls back to
+// dnsx if shuffledns/massdns aren't installed, so nothing breaks.
+func shuffledResolve(cfg config, domain string, names []string, dir string) []string {
+	if !hasTool("shuffledns") || !hasTool("massdns") {
+		return dnsxResolveList(cfg, domain, names, dir) // fallback: dnsx
+	}
+	listFile := filepath.Join(dir, ".sh-cands.tmp")
+	writeLines(listFile, names)
+	defer os.Remove(listFile)
+	// No -t: shuffledns defaults to 10000 massdns resolves; forcing dnsx-scale
+	// threads (100) would cripple it. -r big list, -tr trusted verify.
+	args := []string{"-d", domain, "-l", listFile, "-mode", "resolve", "-silent",
+		"-r", bigResolvers(cfg), "-tr", cfg.resolvers}
+	out, serr, err := runTool("shuffledns", args...)
+	if err != nil && len(out) == 0 {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s shuffledns failed (%s) — using dnsx\n", red(), reset, firstLine(serr, err))
+		return dnsxResolveList(cfg, domain, names, dir)
+	}
+	var res []string
+	for _, ln := range out {
+		if h := ansiRe.ReplaceAllString(strings.TrimSpace(ln), ""); h != "" {
+			res = append(res, h)
+		}
+	}
+	return res
 }
 
 // addNames normalizes/scope-filters/excludes names into set, returns count added.
