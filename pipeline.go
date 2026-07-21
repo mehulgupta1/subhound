@@ -811,13 +811,34 @@ func asnStage(cfg config, domain, dir string) []string {
 	}
 	ptr, _, _ := runToolCtx(120*time.Second, "dnsx", pargs...)
 	var out []string
+	inScope := 0
 	for _, ln := range ptr {
 		h := ansiRe.ReplaceAllString(strings.TrimSpace(ln), "")
 		if h != "" {
 			out = append(out, h) // scope-filtered by addNames() against the domain
+			if strings.HasSuffix(strings.ToLower(h), "."+domain) {
+				inScope++
+			}
 		}
 	}
+	// If reverse-DNS resolved plenty but NONE belong to the target, the ASN space
+	// isn't the target's — it's a CDN/host it sits behind (e.g. Akamai/Cloudflare).
+	// Say so, so a legit 0 doesn't look like a broken stage.
+	if len(out) > 0 && inScope == 0 {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  reverse-DNS resolved %d hosts, all under %s (not %s) — %s is CDN-fronted, so its ASN can't reach its own subdomains\n",
+			red(), reset, len(out), parentDomain(out[0]), domain, domain)
+	}
 	return out
+}
+
+// parentDomain returns the last two labels of a host (a23-x.deploy.akamai.net →
+// akamai.net) — used to name the CDN/host an ASN space belongs to.
+func parentDomain(host string) string {
+	p := strings.Split(strings.TrimSuffix(strings.ToLower(host), "."), ".")
+	if len(p) >= 2 {
+		return strings.Join(p[len(p)-2:], ".")
+	}
+	return host
 }
 
 // harvestInto adds new in-scope names to set, resolves the fresh ones, and merges
