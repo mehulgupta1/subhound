@@ -63,11 +63,6 @@ type config struct {
 	probe     bool // default true, off with -np
 	json      bool
 	silent    bool
-	pushURL   string // dashboard ingest endpoint (-push flag)
-	authKey   string // dashboard API key (-auth flag)
-	project   string // -project name override
-	noPush    bool   // -no-push: skip sending this run
-	noSave    bool   // -no-save: don't remember key/url
 }
 
 func main() {
@@ -80,9 +75,6 @@ func main() {
 		flVhost, flRecursive                      bool
 		flNoPassive, flNoProbe                    bool
 		flJSON, flSilent, flSetup, flConfig, flVer bool
-		flPush, flAuth, flProject, flCron         string
-		flNoPush, flNoSave, flCheck               bool
-		flEvery                                   int
 	)
 
 	flag.StringVar(&flDomain, "d", "", "")
@@ -119,14 +111,6 @@ func main() {
 	flag.BoolVar(&flSetup, "setup", false, "")
 	flag.BoolVar(&flConfig, "config", false, "")
 	flag.BoolVar(&flVer, "version", false, "")
-	flag.StringVar(&flPush, "push", "", "")
-	flag.StringVar(&flAuth, "auth", "", "")
-	flag.StringVar(&flProject, "project", "", "")
-	flag.BoolVar(&flNoPush, "no-push", false, "")
-	flag.BoolVar(&flNoSave, "no-save", false, "")
-	flag.BoolVar(&flCheck, "check", false, "")
-	flag.StringVar(&flCron, "cron", "", "")
-	flag.IntVar(&flEvery, "every", 0, "") // interval gate (hours) used by cron lines
 
 	flag.Usage = printHelp
 	flag.Parse()
@@ -146,12 +130,6 @@ func main() {
 	}
 	if flConfig {
 		os.Exit(runConfig())
-	}
-	if flCheck {
-		os.Exit(runCheck(strings.ToLower(strings.TrimSpace(flDomain)), flPush, flAuth))
-	}
-	if flCron != "" {
-		os.Exit(runCron(flCron, strings.ToLower(strings.TrimSpace(flDomain)), flPush, flAuth))
 	}
 
 	domains := loadDomains(flDomain, flList)
@@ -179,24 +157,12 @@ func main() {
 		probe:     !flNoProbe,
 		json:      flJSON,
 		silent:    flSilent,
-		pushURL:   flPush,
-		authKey:   flAuth,
-		project:   flProject,
-		noPush:    flNoPush,
-		noSave:    flNoSave,
 	}
 
 	installInterruptHandler() // Ctrl-C → keep partial results, exit clean
 
 	exit := 0
 	for _, d := range cfg.domains {
-		// -every N: cron fires hourly but we only actually scan once per N hours.
-		// (Plain cron can't express intervals >24h; this gate can, and survives
-		// reboots/missed fires by comparing against the last-run timestamp.)
-		if flEvery > 0 && !cronGateAllows(d, flEvery) {
-			logf(cfg.silent, "[skip] %s — scanned within the last %dh (interval gate)", d, flEvery)
-			continue
-		}
 		if c := runPipeline(cfg, d); c > exit {
 			exit = c
 		}
@@ -351,21 +317,6 @@ OPTIONS:
   -config          save API keys into subfinder config
   -version         print version
   -h, -help        show this help
-
-DASHBOARD (push httpx results to your recon dashboard):
-  -push  <url>     dashboard ingest endpoint   (env: SUBHOUND_DASHBOARD_URL)
-  -auth  <key>     dashboard API key           (env: SUBHOUND_API_KEY)
-  -project <name>  pick a saved project by name
-  -no-push         don't send this run to the dashboard
-  -no-save         use the key/url once, don't save to config
-  -check           test the dashboard connection (with -d = one project)
-
-  First push saves url+key → next time just:  subhound -d target.com
-
-SCHEDULE (system cron — Linux/macOS, runs on an always-on machine):
-  -cron <hours>    run this target every N hours   (e.g. -cron 12 -d target.com)
-  -cron off        stop the schedule for -d target
-  -cron list       show all scheduled scans
 
 EXAMPLES:
   subhound -d target.com

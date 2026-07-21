@@ -9,8 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -111,6 +109,7 @@ func runPipeline(cfg config, domain string) int {
 		writeLines(filepath.Join(dir, "all-subdomains.txt"), sortedKeys(set))
 		writeResolved(dir, resolved)
 	}
+	
 
 	// ---- PASSIVE ----
 	if cfg.passive {
@@ -213,20 +212,6 @@ func runPipeline(cfg config, domain string) int {
 		aliveCount = probeStage(cfg, sortedKeys(resolved), dir)
 		logf(cfg.silent, "  → %d alive hosts", aliveCount)
 		logf(cfg.silent, "")
-	}
-
-	// ---- PUSH to dashboard ---- (resolve URL+key from flags/config/env)
-	if !cfg.noPush {
-		url, key := loadConfig().resolvePush(domain, cfg.project, cfg.pushURL, cfg.authKey)
-		if url != "" && key != "" {
-			logf(cfg.silent, "[→] PUSH to dashboard")
-			ok := pushResults(cfg, domain, dir, url, key)
-			// remember the settings after a successful first explicit push
-			if ok && !cfg.noSave && cfg.pushURL != "" && cfg.authKey != "" {
-				autoSave(domain, cfg.pushURL, cfg.authKey)
-			}
-			logf(cfg.silent, "")
-		}
 	}
 
 	// summary
@@ -703,80 +688,6 @@ func runToolStdinNull(bin string, args ...string) (out []string, stderr string, 
 	cmd.Stdout, cmd.Stderr = &so, &se
 	err = cmd.Run()
 	return splitLines(so.String()), strings.TrimSpace(se.String()), err
-}
-
-// pushResults POSTs the httpx results (alive.json) to the dashboard, authenticated.
-//
-// API CONTRACT (implement this on the dashboard side):
-//   POST <push-url>
-//   Header: Authorization: Bearer <api-key>
-//   Header: Content-Type: application/json
-//   Body:   {"domain":"target.com","scanned_at":"<RFC3339>","count":N,
-//            "hosts":[ <raw httpx JSON record>, ... ]}
-//   Expect: 2xx on success.
-// pushChunk caps hosts per request. One giant POST for a big scan blows the 30s
-// timeout (and the Worker's body/CPU limits); several smaller POSTs never do.
-const pushChunk = 5000
-
-// pushResults POSTs alive.json to url with Bearer key, in chunks. Returns true if
-// every chunk landed. Never loses data: results stay on disk; next scan re-pushes.
-func pushResults(cfg config, domain, dir, url, key string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, "alive.json"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  %s⚠%s  nothing to push (no probe results — remove -np)\n", red(), reset)
-		return false
-	}
-	var hosts []json.RawMessage
-	for _, ln := range splitLines(string(data)) {
-		hosts = append(hosts, json.RawMessage(ln))
-	}
-	total := len(hosts)
-	if total == 0 {
-		logf(cfg.silent, "  no live hosts to push")
-		return false
-	}
-
-	batches := (total + pushChunk - 1) / pushChunk
-	for i := 0; i < total; i += pushChunk {
-		batch := hosts[i:min(i+pushChunk, total)]
-		if err := pushBatch(domain, url, key, batch); err != nil {
-			fmt.Fprintf(os.Stderr, "  %s✗%s push failed after %d/%d hosts: %v (results kept locally in %s)\n",
-				red(), reset, i, total, err, dir)
-			return false
-		}
-	}
-	logf(cfg.silent, "  %s✓%s pushed %d hosts → dashboard (%d batch(es))", green(), reset, total, batches)
-	return true
-}
-
-// pushBatch POSTs one chunk of hosts. 30s is ample now that each request carries
-// at most pushChunk records.
-func pushBatch(domain, url, key string, batch []json.RawMessage) error {
-	payload, _ := json.Marshal(struct {
-		Domain    string            `json:"domain"`
-		ScannedAt string            `json:"scanned_at"`
-		Count     int               `json:"count"`
-		Hosts     []json.RawMessage `json:"hosts"`
-	}{domain, time.Now().UTC().Format(time.RFC3339), len(batch), batch})
-
-	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("bad push URL: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("User-Agent", "subhound/"+version)
-
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("dashboard rejected: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // httpxRec is the subset of httpx JSON we care about.
