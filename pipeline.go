@@ -445,8 +445,9 @@ func bruteStage(cfg config, domain, dir string) []string {
 // permExplosionCap: per-iteration candidate ceiling (guard against blow-ups).
 const permExplosionCap = 5_000_000
 
-// maxPermIters caps the feedback loop so it always terminates.
-const maxPermIters = 5
+// maxPermIters caps the feedback loop so it always terminates. 3 rounds captures
+// nearly all finds — rounds 4-5 almost never add anything but cost a lot.
+const maxPermIters = 3
 
 // permStage — ITERATIVE permutation (alterx generate → dnsx resolve → feed the
 // newly-found names back in → repeat until nothing new). This is how deep names
@@ -499,7 +500,13 @@ func alterxGen(cfg config, seeds []string, dir string) []string {
 	seedFile := filepath.Join(dir, ".perm-seeds.tmp")
 	writeLines(seedFile, seeds)
 	defer os.Remove(seedFile)
-	out, serr, err := runTool("alterx", "-l", seedFile, "-silent")
+	// -limit caps generation at the source so we never resolve an unbounded
+	// explosion of guesses (the perm-cap; 0 = unlimited for deep scans).
+	args := []string{"-l", seedFile, "-silent"}
+	if cfg.permLimit > 0 {
+		args = append(args, "-limit", itoa(cfg.permLimit))
+	}
+	out, serr, err := runTool("alterx", args...)
 	if err != nil && len(out) == 0 {
 		fmt.Fprintf(os.Stderr, "  %s✗%s alterx failed: %s\n", red(), reset, firstLine(serr, err))
 		return nil

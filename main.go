@@ -63,6 +63,7 @@ type config struct {
 	probe     bool // default true, off with -np
 	json      bool
 	silent    bool
+	permLimit int // -perm-limit: max alterx guesses per round (0 = unlimited)
 }
 
 func main() {
@@ -75,6 +76,7 @@ func main() {
 		flVhost, flRecursive                       bool
 		flNoPassive, flNoProbe                     bool
 		flJSON, flSilent, flSetup, flConfig, flVer bool
+		flPermLimit                                int
 	)
 
 	flag.StringVar(&flDomain, "d", "", "")
@@ -103,6 +105,7 @@ func main() {
 	flag.StringVar(&flResolvers, "resolvers", "", "")
 	flag.IntVar(&flThreads, "t", 100, "")
 	flag.IntVar(&flThreads, "threads", 100, "")
+	flag.IntVar(&flPermLimit, "perm-limit", 300000, "")
 	flag.StringVar(&flOut, "o", "", "")
 	flag.StringVar(&flOut, "output", "", "")
 
@@ -157,6 +160,7 @@ func main() {
 		probe:     !flNoProbe,
 		json:      flJSON,
 		silent:    flSilent,
+		permLimit: flPermLimit,
 	}
 
 	installInterruptHandler() // Ctrl-C → keep partial results, exit clean
@@ -313,6 +317,7 @@ TOGGLES (turn default stages off — solo-mode):
 OPTIONS:
   -w,  -wordlist   wordlist for -brute   (default: bundled)
   -pw, -perm-words token list for -perm  (default: bundled)
+  -perm-limit      max -perm guesses per round  (default 300000, 0 = unlimited)
   -r,  -resolvers  custom resolvers file
   -t,  -threads    concurrency               (default 100)
   -o,  -output     output directory
