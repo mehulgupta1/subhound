@@ -725,8 +725,12 @@ const asnIPCap = 16384
 // it's surfaced clearly (never a silent false-zero).
 func asnStage(cfg config, domain, dir string) []string {
 	// asnmap prompts for a PDCP key on stdin if none set — feed /dev/null so it
-	// aborts instead of hanging, then detect the missing-key case.
-	outLines, serr, _ := runToolStdinNull("asnmap", "-d", domain, "-silent")
+	// aborts instead of hanging. It can ALSO hang on network/API/rate-limit with no
+	// output, so cap it: without this, a stuck asnmap froze the whole scan (the real
+	// "ASN takes forever" bug). 60s is ample — it normally returns in seconds.
+	actx, acancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer acancel()
+	outLines, serr, _ := runStream(actx, true, "asnmap", "-d", domain, "-silent")
 	var cidrs []string
 	for _, ln := range outLines {
 		if c := ansiRe.ReplaceAllString(strings.TrimSpace(ln), ""); cidrRe.MatchString(c) {
@@ -893,11 +897,6 @@ func tlsStage(cfg config, domain string, hosts []string, dir string) []string {
 		}
 	}
 	return out
-}
-
-// runToolStdinNull runs a tool with stdin closed (so interactive prompts abort).
-func runToolStdinNull(bin string, args ...string) (out []string, stderr string, err error) {
-	return runStream(context.Background(), true, bin, args...)
 }
 
 // httpxRec is the subset of httpx JSON we care about.
