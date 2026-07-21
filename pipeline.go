@@ -35,6 +35,7 @@ func installInterruptHandler() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		stopHeartbeat()
 		if d, _ := currentDir.Load().(string); d != "" {
 			fmt.Fprintf(os.Stderr, "\n[!] interrupted — partial results saved in %s/\n", d)
 		} else {
@@ -42,6 +43,65 @@ func installInterruptHandler() {
 		}
 		os.Exit(130)
 	}()
+}
+
+// ── live heartbeat ───────────────────────────────────────────────────────────
+// Long stages (permutation, resolve, ASN) can churn for many minutes emitting no
+// output, leaving you unsure whether it's working or hung. The heartbeat prints a
+// spinner + current stage + elapsed time, refreshed a few times a second, so the
+// scan visibly stays alive. Interactive terminals only — piped/-silent is a no-op
+// (output stays clean for parsing).
+var (
+	hbMu     sync.Mutex   // serializes stderr writes between logf and the ticker
+	hbStage  atomic.Value // string: current stage label
+	hbActive bool
+	hbStop   chan struct{}
+)
+
+func setStage(s string) { hbStage.Store(s) }
+
+func startHeartbeat(silent bool) {
+	if silent || !isTerminal(os.Stderr) {
+		return
+	}
+	hbActive = true
+	hbStop = make(chan struct{})
+	hbStage.Store("starting")
+	go func() {
+		frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+		start := time.Now()
+		tick := time.NewTicker(150 * time.Millisecond)
+		defer tick.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-hbStop:
+				hbMu.Lock()
+				fmt.Fprint(os.Stderr, "\r\033[K")
+				hbMu.Unlock()
+				return
+			case <-tick.C:
+				s, _ := hbStage.Load().(string)
+				hbMu.Lock()
+				fmt.Fprintf(os.Stderr, "\r\033[K  %c %s… %s elapsed", frames[i%len(frames)], s, fmtElapsed(time.Since(start)))
+				hbMu.Unlock()
+			}
+		}
+	}()
+}
+
+func stopHeartbeat() {
+	if hbActive {
+		close(hbStop)
+		hbActive = false
+	}
+}
+
+func fmtElapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	if m := int(d.Minutes()); m > 0 {
+		return fmt.Sprintf("%dm%02ds", m, int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
 // per-source hard wall-clock cap: a stuck source can't stall the phase.
@@ -101,6 +161,9 @@ func runPipeline(cfg config, domain string) int {
 	logf(cfg.silent, "%s[*]%s output : %s/", bold, reset, dir)
 	logf(cfg.silent, "")
 
+	startHeartbeat(cfg.silent)
+	defer stopHeartbeat()
+
 	excl := loadExcluder(cfg.exclude)
 	set := map[string]struct{}{}
 	resolved := map[string][]string{}
@@ -115,6 +178,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- PASSIVE ----
 	if cfg.passive {
+		setStage("passive sources")
 		logf(cfg.silent, "[1] PASSIVE")
 		for _, r := range passiveStage(cfg, domain) {
 			// Only a HARD failure (error AND no output) counts as errored — a source
@@ -146,6 +210,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- BRUTEFORCE ----
 	if cfg.brute {
+		setStage("bruteforce")
 		logf(cfg.silent, "[b] BRUTEFORCE")
 		added := addNames(set, bruteStage(cfg, domain, dir), domain, excl)
 		logf(cfg.silent, "  → %d new resolving names", added)
@@ -155,6 +220,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- PERMUTATION ---- (iterative alterx + resolve feedback loop)
 	if cfg.perm {
+		setStage("permutation")
 		logf(cfg.silent, "[p] PERMUTATE (iterative)")
 		added := addNames(set, permStage(cfg, domain, set, excl, dir), domain, excl)
 		logf(cfg.silent, "  → %d new resolving names (total)", added)
@@ -164,6 +230,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- ASN SWEEP ---- (owned IP space → reverse DNS)
 	if cfg.asn {
+		setStage("ASN sweep")
 		logf(cfg.silent, "[a] ASN SWEEP")
 		added := addNames(set, asnStage(cfg, domain, dir), domain, excl)
 		logf(cfg.silent, "  → %d new names (reverse-DNS)", added)
@@ -179,6 +246,7 @@ func runPipeline(cfg config, domain string) int {
 	}
 
 	// ---- RESOLVE ----
+	setStage("resolving DNS")
 	logf(cfg.silent, "[2] RESOLVE + wildcard filter")
 	for h, ips := range resolveNames(cfg, domain, sortedKeys(set), dir) {
 		resolved[h] = ips
@@ -189,6 +257,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- TLS HARVEST ---- (after resolve; reads certs from live hosts)
 	if cfg.tls {
+		setStage("TLS harvest")
 		logf(cfg.silent, "[t] TLS HARVEST")
 		n := harvestInto(cfg, domain, set, excl, resolved, dir, tlsStage(cfg, domain, sortedKeys(resolved), dir))
 		logf(cfg.silent, "  → %d new names from certs", n)
@@ -198,6 +267,7 @@ func runPipeline(cfg config, domain string) int {
 
 	// ---- VHOST BRUTE ---- (hidden hosts on a shared IP)
 	if cfg.vhost {
+		setStage("vhost brute")
 		logf(cfg.silent, "[v] VHOST BRUTE")
 		n := harvestInto(cfg, domain, set, excl, resolved, dir, vhostStage(cfg, domain, resolved, dir))
 		logf(cfg.silent, "  → %d vhosts found", n)
@@ -210,6 +280,7 @@ func runPipeline(cfg config, domain string) int {
 	// ---- PROBE ----
 	aliveCount := 0
 	if cfg.probe {
+		setStage("probing (httpx)")
 		logf(cfg.silent, "[3] PROBE (httpx)")
 		aliveCount = probeStage(cfg, sortedKeys(resolved), dir)
 		logf(cfg.silent, "  → %d alive hosts", aliveCount)
@@ -217,6 +288,7 @@ func runPipeline(cfg config, domain string) int {
 	}
 
 	// summary
+	stopHeartbeat()
 	logf(cfg.silent, "%s[✓]%s done — all:%d  resolved:%d  alive:%d", bold, reset, len(all), len(resolved), aliveCount)
 	logf(cfg.silent, "    results in %s/", dir)
 

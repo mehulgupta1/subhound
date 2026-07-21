@@ -255,7 +255,12 @@ func logf(silent bool, format string, a ...any) {
 	if silent {
 		return
 	}
+	hbMu.Lock()
+	if hbActive {
+		fmt.Fprint(os.Stderr, "\r\033[K") // wipe the heartbeat line before a real log line
+	}
 	fmt.Fprintf(os.Stderr, format+"\n", a...)
+	hbMu.Unlock()
 }
 
 func printBanner(silent bool) {
