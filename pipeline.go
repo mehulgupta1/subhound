@@ -53,17 +53,20 @@ func installInterruptHandler() {
 // scan visibly stays alive. Interactive terminals only — piped/-silent is a no-op
 // (output stays clean for parsing).
 var (
-	hbMu     sync.Mutex   // serializes stderr writes between logf and the ticker
-	hbStage  atomic.Value // string: current stage label
-	hbCount  atomic.Int64 // live result counter for the current stage/sub-phase
-	hbActive bool
-	hbStop   chan struct{}
+	hbMu      sync.Mutex   // serializes stderr writes between logf and the ticker
+	hbStage   atomic.Value // string: current stage label
+	hbStageAt atomic.Value // time.Time: when the current stage began
+	hbCount   atomic.Int64 // live result counter for the current stage/sub-phase
+	hbActive  bool
+	hbStop    chan struct{}
 )
 
-// setStage labels the current stage AND resets the live counter, so each stage
-// (or sub-phase) counts from zero.
+// setStage labels the current stage, resets the live counter, and restarts the
+// per-stage timer — so the heartbeat shows how long THIS stage has run (not the
+// whole scan), which is what tells you if a stage is actually stuck.
 func setStage(s string) {
 	hbStage.Store(s)
+	hbStageAt.Store(time.Now())
 	hbCount.Store(0)
 }
 
@@ -77,6 +80,7 @@ func startHeartbeat(silent bool) {
 	hbActive = true
 	hbStop = make(chan struct{})
 	hbStage.Store("starting")
+	hbStageAt.Store(time.Now())
 	go func() {
 		frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 		start := time.Now()
@@ -102,7 +106,8 @@ func startHeartbeat(silent bool) {
 					rate = float64(n-lastN) / dt.Seconds()
 					lastN, lastT = n, now
 				}
-				line := fmt.Sprintf("  %c %s… %s elapsed", frames[i%len(frames)], s, fmtElapsed(time.Since(start)))
+				stageAt, _ := hbStageAt.Load().(time.Time)
+				line := fmt.Sprintf("  %c %s… %s", frames[i%len(frames)], s, fmtElapsed(time.Since(stageAt)))
 				if n > 0 {
 					line += fmt.Sprintf(" · %s", commafy(n))
 					if rate >= 1 {
