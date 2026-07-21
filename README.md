@@ -50,11 +50,23 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 | Required (pipeline needs these) | Optional (extra power) |
 |---|---|
 | `subfinder` — passive sources | `assetfinder` — more passive |
-| `dnsx` — DNS resolution | `alterx` — permutation engine (`-perm`) |
+| `dnsx` — DNS resolution (fallback + PTR/IPs) | `alterx` — permutation engine (`-perm`) |
 | `httpx` — HTTP probing | `github-subdomains` — GitHub source |
 | `anew` — dedup merging | `tlsx` — cert harvesting (`-tls`) |
 | `asnmap` — ASN lookup (`-asn`) | `ffuf` — vhost brute (`-vhost`) |
 | `mapcidr` — CIDR expansion | `findomain` — extra passive |
+| | `shuffledns` + `massdns` — **fast** bulk resolving |
+
+`-setup` also downloads the [Trickest resolver list](https://github.com/trickest/resolvers)
+to `~/.subhound/resolvers.txt`.
+
+### Fast resolving (massdns)
+
+Permutation (`-perm`) can generate **hundreds of thousands** of guesses. If
+`shuffledns` + `massdns` are installed, subhound resolves them with massdns
+(the big resolver list for speed + a trusted list to verify) — **~300k names in
+~40s instead of ~30+ min** with dnsx. If they're missing, it falls back to dnsx
+automatically. Cap the guesses per round with `-perm-limit` (default 300000).
 
 ---
 
