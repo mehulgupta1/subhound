@@ -82,6 +82,9 @@ func startHeartbeat(silent bool) {
 		start := time.Now()
 		tick := time.NewTicker(150 * time.Millisecond)
 		defer tick.Stop()
+		var lastN int64  // count at the last rate sample
+		lastT := start   // time of the last rate sample
+		var rate float64 // current results/sec (rolling ~1s window)
 		for i := 0; ; i++ {
 			select {
 			case <-hbStop:
@@ -91,9 +94,20 @@ func startHeartbeat(silent bool) {
 				return
 			case <-tick.C:
 				s, _ := hbStage.Load().(string)
+				n := hbCount.Load()
+				now := time.Now()
+				if n < lastN { // counter reset (new stage) → restart the rate window
+					lastN, lastT, rate = n, now, 0
+				} else if dt := now.Sub(lastT); dt >= time.Second {
+					rate = float64(n-lastN) / dt.Seconds()
+					lastN, lastT = n, now
+				}
 				line := fmt.Sprintf("  %c %s… %s elapsed", frames[i%len(frames)], s, fmtElapsed(time.Since(start)))
-				if n := hbCount.Load(); n > 0 {
+				if n > 0 {
 					line += fmt.Sprintf(" · %s", commafy(n))
+					if rate >= 1 {
+						line += fmt.Sprintf(" · %s/s", commafy(int64(rate)))
+					}
 				}
 				hbMu.Lock()
 				fmt.Fprintf(os.Stderr, "\r\033[K%s", line)
@@ -281,7 +295,7 @@ func runPipeline(cfg config, domain string) int {
 	}
 
 	// ---- RESOLVE ----
-	setStage("resolving DNS")
+	setStage(fmt.Sprintf("resolving %s names", commafy(int64(len(set)))))
 	logf(cfg.silent, "[2] RESOLVE + wildcard filter")
 	for h, ips := range resolveNames(cfg, domain, sortedKeys(set), dir) {
 		resolved[h] = ips
@@ -315,7 +329,7 @@ func runPipeline(cfg config, domain string) int {
 	// ---- PROBE ----
 	aliveCount := 0
 	if cfg.probe {
-		setStage("probing (httpx)")
+		setStage(fmt.Sprintf("probing %s hosts", commafy(int64(len(resolved)))))
 		logf(cfg.silent, "[3] PROBE (httpx)")
 		aliveCount = probeStage(cfg, sortedKeys(resolved), dir)
 		logf(cfg.silent, "  → %d alive hosts", aliveCount)
@@ -460,7 +474,7 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 				red(), reset, iter, len(cands), permExplosionCap)
 			break
 		}
-		setStage(fmt.Sprintf("permutation r%d · resolving", iter))
+		setStage(fmt.Sprintf("permutation r%d · resolving %s guesses", iter, commafy(int64(len(cands)))))
 		var fresh []string
 		for _, n := range dnsxResolveList(cfg, domain, cands, dir) {
 			if n = normalize(n, domain); n != "" && !excl.match(n) {
