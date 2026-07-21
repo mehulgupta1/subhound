@@ -398,31 +398,45 @@ func passiveStage(cfg config, domain string) []srcResult {
 	return results
 }
 
-// githubToken returns the GitHub token for github-subdomains: GITHUB_TOKEN if
-// set, else the token saved via `subhound -config` in subfinder's
-// provider-config.yaml — so a token pasted into -config "just works" here too.
-func githubToken() string {
-	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
-	}
+// subfinderKey reads a provider's key from subfinder's provider-config.yaml —
+// where `subhound -config` saves keys — so a key pasted into -config "just works"
+// for our own tools too. Returns "" if not found.
+func subfinderKey(provider string) string {
 	home, _ := os.UserHomeDir()
 	b, err := os.ReadFile(filepath.Join(home, ".config", "subfinder", "provider-config.yaml"))
 	if err != nil {
 		return ""
 	}
-	inGithub := false
+	in := false
 	for _, ln := range strings.Split(string(b), "\n") {
 		t := strings.TrimSpace(ln)
 		switch {
-		case t == "github:":
-			inGithub = true
-		case inGithub && strings.HasPrefix(t, "- "):
+		case t == provider+":":
+			in = true
+		case in && strings.HasPrefix(t, "- "):
 			return strings.TrimSpace(t[2:])
-		case inGithub && t != "" && !strings.HasPrefix(t, "-"):
-			inGithub = false // moved on to the next provider block
+		case in && t != "" && !strings.HasPrefix(t, "-"):
+			in = false // moved on to the next provider block
 		}
 	}
 	return ""
+}
+
+// githubToken: GITHUB_TOKEN env, else the token saved via `subhound -config`.
+func githubToken() string {
+	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
+		return t
+	}
+	return subfinderKey("github")
+}
+
+// pdcpKey: PDCP_API_KEY env (asnmap reads this), else the Chaos/PDCP key saved
+// via `subhound -config`.
+func pdcpKey() string {
+	if t := strings.TrimSpace(os.Getenv("PDCP_API_KEY")); t != "" {
+		return t
+	}
+	return subfinderKey("chaos")
 }
 
 func subfinderArgs(cfg config, domain string) []string {
@@ -724,10 +738,18 @@ const asnIPCap = 16384
 // filtered back to the target. asnmap needs a ProjectDiscovery API key; if missing
 // it's surfaced clearly (never a silent false-zero).
 func asnStage(cfg config, domain, dir string) []string {
-	// asnmap prompts for a PDCP key on stdin if none set — feed /dev/null so it
-	// aborts instead of hanging. It can ALSO hang on network/API/rate-limit with no
-	// output, so cap it: without this, a stuck asnmap froze the whole scan (the real
-	// "ASN takes forever" bug). 60s is ample — it normally returns in seconds.
+	// asnmap needs a PDCP key. Use PDCP_API_KEY, else the Chaos/PDCP key saved via
+	// `subhound -config`. With NO key asnmap just hangs — so skip fast instead of
+	// burning the 60s timeout below (that hang was the real "ASN takes forever" bug).
+	key := pdcpKey()
+	if key == "" {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  ASN needs a ProjectDiscovery API key. Set PDCP_API_KEY (free at cloud.projectdiscovery.io) or run `subhound -config` — skipping ASN.\n", red(), reset)
+		return nil
+	}
+	os.Setenv("PDCP_API_KEY", key) // ensure the asnmap subprocess sees it
+
+	// asnmap can still hang on network/API/rate-limit with no output, so cap it at
+	// 60s (it normally returns in seconds) as a safety net.
 	actx, acancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer acancel()
 	outLines, serr, _ := runStream(actx, true, "asnmap", "-d", domain, "-silent")
