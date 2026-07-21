@@ -67,13 +67,13 @@ type config struct {
 
 func main() {
 	var (
-		flDomain, flList                          string
-		flWord, flPerm, flResolvers, flExclude    string
-		flOut                                     string
-		flThreads                                 int
+		flDomain, flList                           string
+		flWord, flPerm, flResolvers, flExclude     string
+		flOut                                      string
+		flThreads                                  int
 		flAll, flBrute, flPerm2, flAsn, flTls      bool
-		flVhost, flRecursive                      bool
-		flNoPassive, flNoProbe                    bool
+		flVhost, flRecursive                       bool
+		flNoPassive, flNoProbe                     bool
 		flJSON, flSilent, flSetup, flConfig, flVer bool
 	)
 

@@ -112,7 +112,6 @@ func runPipeline(cfg config, domain string) int {
 		writeLines(filepath.Join(dir, "all-subdomains.txt"), sortedKeys(set))
 		writeResolved(dir, resolved)
 	}
-	
 
 	// ---- PASSIVE ----
 	if cfg.passive {
