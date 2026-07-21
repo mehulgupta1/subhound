@@ -368,8 +368,9 @@ func passiveStage(cfg config, domain string) []srcResult {
 		{name: "assetfinder", bin: "assetfinder", args: []string{"--subs-only", domain}},
 		{name: "findomain", bin: "findomain", args: []string{"-t", domain, "-q"}},
 	}
-	// github-subdomains only if a token is set
-	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+	// github-subdomains if a token is available — env var OR the one saved via
+	// `subhound -config` (so a pasted -config token works without exporting it).
+	if tok := githubToken(); tok != "" {
 		jobs = append(jobs, job{name: "github-subdomains", bin: "github-subdomains", args: []string{"-d", domain, "-t", tok}})
 	}
 
@@ -390,6 +391,33 @@ func passiveStage(cfg config, domain string) []srcResult {
 	}
 	wg.Wait()
 	return results
+}
+
+// githubToken returns the GitHub token for github-subdomains: GITHUB_TOKEN if
+// set, else the token saved via `subhound -config` in subfinder's
+// provider-config.yaml — so a token pasted into -config "just works" here too.
+func githubToken() string {
+	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
+		return t
+	}
+	home, _ := os.UserHomeDir()
+	b, err := os.ReadFile(filepath.Join(home, ".config", "subfinder", "provider-config.yaml"))
+	if err != nil {
+		return ""
+	}
+	inGithub := false
+	for _, ln := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(ln)
+		switch {
+		case t == "github:":
+			inGithub = true
+		case inGithub && strings.HasPrefix(t, "- "):
+			return strings.TrimSpace(t[2:])
+		case inGithub && t != "" && !strings.HasPrefix(t, "-"):
+			inGithub = false // moved on to the next provider block
+		}
+	}
+	return ""
 }
 
 func subfinderArgs(cfg config, domain string) []string {
