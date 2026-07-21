@@ -825,7 +825,7 @@ func asnStage(cfg config, domain, dir string) []string {
 	// isn't the target's — it's a CDN/host it sits behind (e.g. Akamai/Cloudflare).
 	// Say so, so a legit 0 doesn't look like a broken stage.
 	if len(out) > 0 && inScope == 0 {
-		fmt.Fprintf(os.Stderr, "  %s⚠%s  reverse-DNS resolved %d hosts, all under %s (not %s) — %s is CDN-fronted, so its ASN can't reach its own subdomains\n",
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  reverse-DNS resolved %d hosts, all under %s (not %s) — this ASN's PTRs point to CDN/host infra, not %s's own subdomains\n",
 			red(), reset, len(out), parentDomain(out[0]), domain, domain)
 	}
 	return out
