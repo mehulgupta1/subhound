@@ -48,10 +48,13 @@ func installInterruptHandler() {
 // On timeout we keep whatever it already printed (partial results are fine).
 // Fast default, but generous for -all (thorough mode legitimately takes longer).
 func passiveTimeout(cfg config) time.Duration {
+	// Must exceed subfinder's own -max-time (see subfinderArgs) so subfinder
+	// self-terminates gracefully with partial results instead of being SIGKILLed
+	// at this wall — a SIGKILL would read as a hard error and drop the source.
 	if cfg.all {
-		return 240 * time.Second
+		return 270 * time.Second // subfinder -max-time 4m (240s) + margin
 	}
-	return 45 * time.Second
+	return 90 * time.Second // subfinder -max-time 1m (60s) + margin
 }
 
 // srcResult is one passive source's outcome — captured so failures are visible.
@@ -270,8 +273,15 @@ func passiveStage(cfg config, domain string) []srcResult {
 }
 
 func subfinderArgs(cfg config, domain string) []string {
-	// -timeout caps how long subfinder waits on any single slow source (seconds).
-	a := []string{"-d", domain, "-silent", "-timeout", "20"}
+	// Bound subfinder so it returns (with partial results) BEFORE passiveTimeout's
+	// wall kills it: -timeout = per-source seconds, -max-time = overall minutes.
+	// Without this, a slow keyless source drags the run past the wall → SIGKILL →
+	// the whole source reads as an error and its results are lost.
+	timeout, maxTime := "15", "1"
+	if cfg.all {
+		timeout, maxTime = "30", "4" // -all queries more sources; give them longer
+	}
+	a := []string{"-d", domain, "-silent", "-timeout", timeout, "-max-time", maxTime}
 	if cfg.all {
 		a = append(a, "-all")
 	}
