@@ -89,6 +89,7 @@ var tools = []tool{
 	{"github-subdomains", "github.com/gwen001/github-subdomains@latest", false},
 	{"tlsx", "github.com/projectdiscovery/tlsx/cmd/tlsx@latest", false},
 	{"ffuf", "github.com/ffuf/ffuf/v2@latest", false},
+	{"shuffledns", "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest", false},
 }
 
 // requiredTools is the minimal set the pipeline needs to run at all.
@@ -152,6 +153,31 @@ func runSetup() int {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "  ✓ %-18s already installed\n", "findomain")
+	}
+
+	// massdns — C tool built from source (the fast bulk resolver shuffledns drives)
+	if resolveCmd("massdns", gobin) == "" {
+		fmt.Fprintf(os.Stderr, "  … installing massdns (build from source)\n")
+		if err := installMassdns(gobin); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %-18s failed (optional): %v\n", "massdns", err)
+			failed = append(failed, "massdns")
+		} else {
+			fmt.Fprintf(os.Stderr, "  ✓ %-18s installed\n", "massdns")
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  ✓ %-18s already installed\n", "massdns")
+	}
+
+	// Trickest resolvers — big validated list for fast massdns/shuffledns resolving
+	if home, _ := os.UserHomeDir(); home != "" {
+		rp := filepath.Join(home, ".subhound", "resolvers.txt")
+		os.MkdirAll(filepath.Dir(rp), 0o755)
+		fmt.Fprintf(os.Stderr, "  … fetching Trickest resolvers\n")
+		if err := download("https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt", rp); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✗ %-18s download failed (optional): %v\n", "resolvers", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  ✓ %-18s %s\n", "resolvers", rp)
+		}
 	}
 
 	fmt.Fprintln(os.Stderr)
@@ -268,6 +294,47 @@ func installFindomain(gobin string) error {
 	}
 	// extract the single `findomain` binary from the zip (no system unzip needed)
 	return unzipBinary(zipPath, "findomain", filepath.Join(gobin, "findomain"))
+}
+
+// installMassdns builds massdns from source (git clone + make) into gobin — it's
+// the fast bulk resolver shuffledns drives. Needs git, make, and a C compiler.
+func installMassdns(gobin string) error {
+	if _, err := exec.LookPath("git"); err != nil {
+		return fmt.Errorf("git not found")
+	}
+	if _, err := exec.LookPath("make"); err != nil {
+		return fmt.Errorf("make not found")
+	}
+	if _, err := exec.LookPath("gcc"); err != nil {
+		if _, e2 := exec.LookPath("cc"); e2 != nil {
+			return fmt.Errorf("no C compiler (gcc/cc) found")
+		}
+	}
+	tmp, err := os.MkdirTemp("", "massdns")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	src := filepath.Join(tmp, "massdns")
+	clone := exec.Command("git", "clone", "--depth", "1", "https://github.com/blechschmidt/massdns.git", src)
+	clone.Stdout, clone.Stderr = os.Stderr, os.Stderr
+	if err := clone.Run(); err != nil {
+		return fmt.Errorf("git clone: %w", err)
+	}
+	mk := exec.Command("make")
+	mk.Dir = src
+	mk.Stdout, mk.Stderr = os.Stderr, os.Stderr
+	if err := mk.Run(); err != nil {
+		return fmt.Errorf("make: %w", err)
+	}
+	if err := os.MkdirAll(gobin, 0o755); err != nil {
+		return err
+	}
+	bin, err := os.ReadFile(filepath.Join(src, "bin", "massdns"))
+	if err != nil {
+		return fmt.Errorf("read built binary: %w", err)
+	}
+	return os.WriteFile(filepath.Join(gobin, "massdns"), bin, 0o755)
 }
 
 func findomainAsset() string {
