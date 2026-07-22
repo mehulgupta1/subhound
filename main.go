@@ -54,6 +54,7 @@ type config struct {
 	threads   int
 	all       bool
 	brute     bool
+	bruteFull bool // -brute-full: brute the full 9.5M list (else a fast top-slice)
 	perm      bool
 	asn       bool
 	tls       bool
@@ -63,7 +64,8 @@ type config struct {
 	probe     bool // default true, off with -np
 	json      bool
 	silent    bool
-	permLimit int // -perm-limit: max alterx guesses per round (0 = unlimited)
+	permLimit int  // -perm-limit: max alterx guesses per round (0 = unlimited)
+	github    bool // -github: run github-subdomains (slow/rate-limited, opt-in)
 }
 
 func main() {
@@ -77,6 +79,7 @@ func main() {
 		flNoPassive, flNoProbe                     bool
 		flJSON, flSilent, flSetup, flConfig, flVer bool
 		flPermLimit                                int
+		flBruteFull, flGithub                      bool
 	)
 
 	flag.StringVar(&flDomain, "d", "", "")
@@ -87,6 +90,8 @@ func main() {
 
 	flag.BoolVar(&flAll, "all", false, "")
 	flag.BoolVar(&flBrute, "brute", false, "")
+	flag.BoolVar(&flBruteFull, "brute-full", false, "")
+	flag.BoolVar(&flGithub, "github", false, "")
 	flag.BoolVar(&flPerm2, "perm", false, "")
 	flag.BoolVar(&flAsn, "asn", false, "")
 	flag.BoolVar(&flTls, "tls", false, "")
@@ -141,6 +146,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if flBruteFull {
+		flBrute = true // -brute-full implies bruteforce
+	}
+
 	cfg := config{
 		domains:   domains,
 		wordlist:  flWord,
@@ -151,6 +160,7 @@ func main() {
 		threads:   flThreads,
 		all:       flAll,
 		brute:     flBrute,
+		bruteFull: flBruteFull,
 		perm:      flPerm2,
 		asn:       flAsn,
 		tls:       flTls,
@@ -161,6 +171,7 @@ func main() {
 		json:      flJSON,
 		silent:    flSilent,
 		permLimit: flPermLimit,
+		github:    flGithub,
 	}
 
 	installInterruptHandler() // Ctrl-C → keep partial results, exit clean
@@ -301,9 +312,11 @@ INPUT:
 
 DISCOVERY:
   -all             enable all passive sources
-  -brute           DNS bruteforce (built-in wordlist or -w)
+  -brute           DNS bruteforce — fast top-100k of the DNS wordlist (~1 min)
+  -brute-full      DNS bruteforce — the FULL 9.5M wordlist (~25-30 min)
   -perm            permutation / mutation discovery
   -asn             ASN + reverse-DNS sweep
+  -github          github-subdomains source (needs a token; slow, ~4 min)
   -recursive       extra brute/perm pass over newly found subs
 
 PROBE & EXTRAS:
@@ -315,7 +328,7 @@ TOGGLES (turn default stages off — solo-mode):
   -np, -no-probe   skip the HTTP probe (probe runs by DEFAULT)
 
 OPTIONS:
-  -w,  -wordlist   wordlist for -brute   (default: bundled)
+  -w,  -wordlist   wordlist for -brute   (default: Assetnote, via -setup)
   -pw, -perm-words token list for -perm  (default: bundled)
   -perm-limit      max -perm guesses per round  (default 300000, 0 = unlimited)
   -r,  -resolvers  custom resolvers file

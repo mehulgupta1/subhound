@@ -373,20 +373,26 @@ func runPipeline(cfg config, domain string) int {
 // so parallel is safe — see controlled-parallelism rule).
 func passiveStage(cfg config, domain string) []srcResult {
 	type job struct {
-		name string
-		bin  string
-		args []string
-		skip bool
+		name    string
+		bin     string
+		args    []string
+		timeout time.Duration // 0 = use passiveTimeout(cfg)
 	}
 	jobs := []job{
 		{name: "subfinder", bin: "subfinder", args: subfinderArgs(cfg, domain)},
 		{name: "assetfinder", bin: "assetfinder", args: []string{"--subs-only", domain}},
 		{name: "findomain", bin: "findomain", args: []string{"-t", domain, "-q"}},
 	}
-	// github-subdomains if a token is available — env var OR the one saved via
-	// `subhound -config` (so a pasted -config token works without exporting it).
-	if tok := githubToken(); tok != "" {
-		jobs = append(jobs, job{name: "github-subdomains", bin: "github-subdomains", args: []string{"-d", domain, "-t", tok}})
+	// github-subdomains is opt-in (-github): it's valuable (thousands of names) but
+	// GitHub rate-limits it hard (~4 min), so running it automatically would stall
+	// every scan. When enabled, give it its own long timeout so it actually finishes.
+	if cfg.github {
+		if tok := githubToken(); tok != "" {
+			jobs = append(jobs, job{name: "github-subdomains", bin: "github-subdomains",
+				args: []string{"-d", domain, "-t", tok}, timeout: 5 * time.Minute})
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s⚠%s  -github set but no token — add one with `subhound -config`\n", red(), reset)
+		}
 	}
 
 	results := make([]srcResult, len(jobs))
@@ -400,7 +406,11 @@ func passiveStage(cfg config, domain string) []srcResult {
 		wg.Add(1)
 		go func(i int, j job) {
 			defer wg.Done()
-			out, serr, err := runToolCtx(passiveTimeout(cfg), j.bin, j.args...)
+			to := j.timeout
+			if to == 0 {
+				to = passiveTimeout(cfg)
+			}
+			out, serr, err := runToolCtx(to, j.bin, j.args...)
 			results[i] = srcResult{source: j.name, names: out, err: err, stderr: serr}
 		}(i, j)
 	}
@@ -468,11 +478,47 @@ func subfinderArgs(cfg config, domain string) []string {
 	return a
 }
 
-// bruteStage runs dnsx bruteforce with the wordlist against the apex domain.
-// dnsx only emits names that resolve, and -wd strips wildcard noise.
+// bruteFastLimit is how many words the fast default -brute tries. The Assetnote
+// list is frequency-sorted, so the top slice catches almost everything quickly;
+// -brute-full uses the whole 9.5M list.
+const bruteFastLimit = 100000
+
+// topLines writes the first n lines of src to a temp file, returning its path
+// ("" on error) — used to slice the huge default wordlist for a fast -brute.
+func topLines(src string, n int, dir string) string {
+	f, err := os.Open(src)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	out := filepath.Join(dir, ".brute-slice.tmp")
+	w, err := os.Create(out)
+	if err != nil {
+		return ""
+	}
+	defer w.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for i := 0; i < n && sc.Scan(); i++ {
+		fmt.Fprintln(w, sc.Text())
+	}
+	return out
+}
+
+// bruteStage resolves wordlist×domain guesses: shuffledns/massdns for the big
+// default list (dnsx fallback for small lists). -wd/-tr strip wildcard noise.
 func bruteStage(cfg config, domain, dir string) []string {
 	wl, cleanup := wordlistPath(cfg.wordlist, dir)
 	defer cleanup()
+
+	// Fast -brute uses the top slice of the frequency-sorted default list (~1 min);
+	// the full 9.5M is opt-in via -brute-full. A user-supplied -w is used whole.
+	if cfg.wordlist == "" && !cfg.bruteFull {
+		if s := topLines(wl, bruteFastLimit, dir); s != "" {
+			wl = s
+			defer os.Remove(s)
+		}
+	}
 
 	var lines []string
 	var serr string
