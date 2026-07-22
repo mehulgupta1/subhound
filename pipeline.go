@@ -387,9 +387,10 @@ func passiveStage(cfg config, domain string) []srcResult {
 	// GitHub rate-limits it hard (~4 min), so running it automatically would stall
 	// every scan. When enabled, give it its own long timeout so it actually finishes.
 	if cfg.github {
-		if tok := githubToken(); tok != "" {
-			jobs = append(jobs, job{name: "github-subdomains", bin: "github-subdomains",
-				args: []string{"-d", domain, "-t", tok}, timeout: 5 * time.Minute})
+		if toks := githubTokens(); toks != "" {
+			n := strings.Count(toks, ",") + 1
+			jobs = append(jobs, job{name: fmt.Sprintf("github-subdomains(%dtok)", n), bin: "github-subdomains",
+				args: []string{"-d", domain, "-t", toks}, timeout: 5 * time.Minute})
 		} else {
 			fmt.Fprintf(os.Stderr, "  %s⚠%s  -github set but no token — add one with `subhound -config`\n", red(), reset)
 		}
@@ -442,12 +443,40 @@ func subfinderKey(provider string) string {
 	return ""
 }
 
-// githubToken: GITHUB_TOKEN env, else the token saved via `subhound -config`.
-func githubToken() string {
-	if t := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
+// githubTokens returns ALL GitHub tokens for github-subdomains, comma-joined:
+// GITHUB_TOKEN env (itself may be comma/space/newline-separated) plus every token
+// listed under `github:` in subfinder's config. More tokens = more rate-limit
+// buckets = much faster (github-subdomains rotates across them).
+func githubTokens() string {
+	var toks []string
+	split := func(s string) []string {
+		return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
 	}
-	return subfinderKey("github")
+	toks = append(toks, split(os.Getenv("GITHUB_TOKEN"))...)
+	home, _ := os.UserHomeDir()
+	if b, err := os.ReadFile(filepath.Join(home, ".config", "subfinder", "provider-config.yaml")); err == nil {
+		in := false
+		for _, ln := range strings.Split(string(b), "\n") {
+			t := strings.TrimSpace(ln)
+			switch {
+			case t == "github:":
+				in = true
+			case in && strings.HasPrefix(t, "- "):
+				toks = append(toks, strings.TrimSpace(t[2:]))
+			case in && t != "" && !strings.HasPrefix(t, "-"):
+				in = false // next provider block
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range toks {
+		if t = strings.TrimSpace(t); t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // pdcpKey: PDCP_API_KEY env (asnmap reads this), else the Chaos/PDCP key saved

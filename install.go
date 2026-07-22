@@ -29,15 +29,22 @@ func runConfig() int {
 	}
 	fmt.Fprintln(os.Stderr, "[*] SubHound config — enter API keys (blank to skip)")
 	chaos := ask("Chaos / PDCP key")
-	github := ask("GitHub token")
+	github := ask("GitHub token(s) — comma-separated for multiple (faster -github)")
 	st := ask("SecurityTrails key")
 	vt := ask("VirusTotal key")
 
-	// subfinder provider-config.yaml
+	// subfinder provider-config.yaml — comma-separated values become a YAML list
+	// (github/chaos accept multiple; more github tokens = faster github-subdomains).
 	var b strings.Builder
 	add := func(name, val string) {
-		if val != "" {
-			fmt.Fprintf(&b, "%s:\n  - %s\n", name, val)
+		if val = strings.TrimSpace(val); val == "" {
+			return
+		}
+		fmt.Fprintf(&b, "%s:\n", name)
+		for _, v := range strings.Split(val, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				fmt.Fprintf(&b, "  - %s\n", v)
+			}
 		}
 	}
 	add("chaos", chaos)
