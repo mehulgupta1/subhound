@@ -474,16 +474,27 @@ func bruteStage(cfg config, domain, dir string) []string {
 	wl, cleanup := wordlistPath(cfg.wordlist, dir)
 	defer cleanup()
 
-	args := []string{"-d", domain, "-w", wl, "-silent", "-nc", "-wd", domain}
-	if cfg.resolvers != "" {
-		args = append(args, "-r", cfg.resolvers)
+	var lines []string
+	var serr string
+	var err error
+	if hasTool("shuffledns") && hasTool("massdns") {
+		// shuffledns (massdns) is the only thing that can brute the huge default
+		// wordlist fast: big list (-r) for speed + trusted (-tr) to verify hits.
+		lines, serr, err = runTool("shuffledns", "-d", domain, "-w", wl, "-mode", "bruteforce",
+			"-silent", "-r", bigResolvers(cfg), "-tr", cfg.resolvers)
+	} else {
+		// dnsx fallback — only sane for a small wordlist.
+		args := []string{"-d", domain, "-w", wl, "-silent", "-nc", "-wd", domain}
+		if cfg.resolvers != "" {
+			args = append(args, "-r", cfg.resolvers)
+		}
+		if cfg.threads > 0 {
+			args = append(args, "-t", itoa(cfg.threads))
+		}
+		lines, serr, err = runTool("dnsx", args...)
 	}
-	if cfg.threads > 0 {
-		args = append(args, "-t", itoa(cfg.threads))
-	}
-	lines, serr, err := runTool("dnsx", args...)
 	if err != nil && len(lines) == 0 {
-		fmt.Fprintf(os.Stderr, "  %s✗%s dnsx brute failed: %s\n", red(), reset, firstLine(serr, err))
+		fmt.Fprintf(os.Stderr, "  %s✗%s brute failed: %s\n", red(), reset, firstLine(serr, err))
 		return nil
 	}
 	var out []string
@@ -563,6 +574,11 @@ func alterxGen(cfg config, seeds []string, dir string) []string {
 	if cfg.permLimit > 0 {
 		args = append(args, "-limit", itoa(cfg.permLimit))
 	}
+	// custom permutation words (six2dez list via -setup, or user -pw) drive alterx's
+	// {{word}} patterns via -pp word=file.
+	pw, pwc := permWordsPath(cfg.permWords, dir)
+	defer pwc()
+	args = append(args, "-pp", "word="+pw)
 	out, serr, err := runTool("alterx", args...)
 	if err != nil && len(out) == 0 {
 		fmt.Fprintf(os.Stderr, "  %s✗%s alterx failed: %s\n", red(), reset, firstLine(serr, err))

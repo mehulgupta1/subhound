@@ -168,16 +168,23 @@ func runSetup() int {
 		fmt.Fprintf(os.Stderr, "  ✓ %-18s already installed\n", "massdns")
 	}
 
-	// Trickest resolvers — big validated list for fast massdns/shuffledns resolving
+	// Downloaded lists (all optional/fail-soft) into ~/.subhound/:
+	//   resolvers = Trickest (fast massdns), dns-wordlist = Assetnote (9.5M brute),
+	//   perm-words = six2dez (permutation tokens).
 	if home, _ := os.UserHomeDir(); home != "" {
-		rp := filepath.Join(home, ".subhound", "resolvers.txt")
-		os.MkdirAll(filepath.Dir(rp), 0o755)
-		fmt.Fprintf(os.Stderr, "  … fetching Trickest resolvers\n")
-		if err := download("https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt", rp); err != nil {
-			fmt.Fprintf(os.Stderr, "  ✗ %-18s download failed (optional): %v\n", "resolvers", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  ✓ %-18s %s\n", "resolvers", rp)
+		sub := filepath.Join(home, ".subhound")
+		os.MkdirAll(sub, 0o755)
+		fetch := func(label, url, name string) {
+			fmt.Fprintf(os.Stderr, "  … fetching %s\n", label)
+			if err := download(url, filepath.Join(sub, name)); err != nil {
+				fmt.Fprintf(os.Stderr, "  ✗ %-18s download failed (optional): %v\n", label, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "  ✓ %-18s ~/.subhound/%s\n", label, name)
+			}
 		}
+		fetch("resolvers", "https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt", "resolvers.txt")
+		fetch("dns-wordlist", "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt", "dns-wordlist.txt")
+		fetch("perm-words", "https://gist.githubusercontent.com/six2dez/ffc2b14d283e8f8eff6ac83e20a3c4b4/raw/", "perm-words.txt")
 	}
 
 	fmt.Fprintln(os.Stderr)
