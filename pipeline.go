@@ -386,14 +386,21 @@ func passiveStage(cfg config, domain string) []srcResult {
 	// github-subdomains is opt-in (-github): it's valuable (thousands of names) but
 	// GitHub rate-limits it hard (~4 min), so running it automatically would stall
 	// every scan. When enabled, give it its own long timeout so it actually finishes.
-	if cfg.github {
-		if toks := githubTokens(); toks != "" {
-			n := strings.Count(toks, ",") + 1
-			jobs = append(jobs, job{name: fmt.Sprintf("github-subdomains(%dtok)", n), bin: "github-subdomains",
-				args: []string{"-d", domain, "-t", toks}, timeout: 5 * time.Minute})
-		} else {
-			fmt.Fprintf(os.Stderr, "  %s⚠%s  -github set but no token — add one with `subhound -config`\n", red(), reset)
+	// github-subdomains runs by DEFAULT when a token is configured. It runs in
+	// PARALLEL with the other sources under the shared passive window, so it doesn't
+	// add scan time — it just returns more the more tokens you have (each token is a
+	// separate ~30 req/min bucket). -github gives it an EXTENDED budget (5 min) for a
+	// thorough dig even with few tokens.
+	if toks := githubTokens(); toks != "" {
+		n := strings.Count(toks, ",") + 1
+		to := time.Duration(0) // 0 = shared passiveTimeout
+		if cfg.github {
+			to = 5 * time.Minute
 		}
+		jobs = append(jobs, job{name: fmt.Sprintf("github-subdomains(%dtok)", n), bin: "github-subdomains",
+			args: []string{"-d", domain, "-t", toks}, timeout: to})
+	} else if cfg.github {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  -github set but no token — add one with `subhound -config`\n", red(), reset)
 	}
 
 	results := make([]srcResult, len(jobs))

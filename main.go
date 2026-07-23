@@ -316,7 +316,8 @@ DISCOVERY:
   -brute-full      DNS bruteforce — the FULL 9.5M wordlist (~25-30 min)
   -perm            permutation / mutation discovery
   -asn             ASN + reverse-DNS sweep
-  -github          github-subdomains source (needs a token; slow, ~4 min)
+  -github          give github-subdomains extra time (5m thorough dig; it already
+                   runs by default when a token is set — add more for speed)
   -recursive       extra brute/perm pass over newly found subs
 
 PROBE & EXTRAS:
