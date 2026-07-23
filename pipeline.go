@@ -621,6 +621,25 @@ const permExplosionCap = 5_000_000
 // nearly all finds — rounds 4-5 almost never add anything but cost a lot.
 const maxPermIters = 3
 
+// permSeedCap bounds how many names feed permutation by default. alterx's cost
+// explodes with seed count (a 100k-name domain → 20min+), and permuting a huge
+// set is mostly wasteful — so sample evenly down to this. -perm-deep skips the cap.
+const permSeedCap = 5000
+
+// sampleSeeds returns at most n items, spread evenly across seeds (a stride sample,
+// so it's not alphabetically biased).
+func sampleSeeds(seeds []string, n int) []string {
+	if len(seeds) <= n {
+		return seeds
+	}
+	stride := len(seeds) / n
+	out := make([]string, 0, n)
+	for i := 0; i < len(seeds) && len(out) < n; i += stride {
+		out = append(out, seeds[i])
+	}
+	return out
+}
+
 // permStage — ITERATIVE permutation (alterx generate → dnsx resolve → feed the
 // newly-found names back in → repeat until nothing new). This is how deep names
 // like dev.legacy.api.internal.example.com surface: each round's discoveries
@@ -634,6 +653,12 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 		seen[k] = struct{}{}
 	}
 	seeds := sortedKeys(set)
+	if !cfg.permDeep && len(seeds) > permSeedCap {
+		logf(cfg.silent, "  %s seeds → sampling %s for permutation (use -perm-deep for all)", commafy(int64(len(seeds))), commafy(int64(permSeedCap)))
+		seeds = sampleSeeds(seeds, permSeedCap)
+	} else if cfg.permDeep && len(seeds) > permSeedCap {
+		logf(cfg.silent, "  %s⚠%s  -perm-deep: permuting all %s seeds — this can take a long time", red(), reset, commafy(int64(len(seeds))))
+	}
 	var allNew []string
 
 	for iter := 1; iter <= maxPermIters; iter++ {
@@ -663,6 +688,9 @@ func permStage(cfg config, domain string, set map[string]struct{}, excl *exclude
 			break // loop stabilized — nothing new discovered
 		}
 		seeds = fresh // feed ONLY the newly-found names back in
+		if !cfg.permDeep {
+			seeds = sampleSeeds(seeds, permSeedCap) // keep later rounds bounded too
+		}
 	}
 	return allNew
 }

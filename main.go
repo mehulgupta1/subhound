@@ -56,6 +56,7 @@ type config struct {
 	brute     bool
 	bruteFull bool // -brute-full: brute the full 9.5M list (else a fast top-slice)
 	perm      bool
+	permDeep  bool // -perm-deep: permute ALL seeds (else sample ~5k)
 	asn       bool
 	tls       bool
 	vhost     bool
@@ -79,7 +80,7 @@ func main() {
 		flNoPassive, flNoProbe                     bool
 		flJSON, flSilent, flSetup, flConfig, flVer bool
 		flPermLimit                                int
-		flBruteFull, flGithub                      bool
+		flBruteFull, flGithub, flPermDeep          bool
 	)
 
 	flag.StringVar(&flDomain, "d", "", "")
@@ -93,6 +94,7 @@ func main() {
 	flag.BoolVar(&flBruteFull, "brute-full", false, "")
 	flag.BoolVar(&flGithub, "github", false, "")
 	flag.BoolVar(&flPerm2, "perm", false, "")
+	flag.BoolVar(&flPermDeep, "perm-deep", false, "")
 	flag.BoolVar(&flAsn, "asn", false, "")
 	flag.BoolVar(&flTls, "tls", false, "")
 	flag.BoolVar(&flVhost, "vhost", false, "")
@@ -149,6 +151,9 @@ func main() {
 	if flBruteFull {
 		flBrute = true // -brute-full implies bruteforce
 	}
+	if flPermDeep {
+		flPerm2 = true // -perm-deep implies permutation
+	}
 
 	cfg := config{
 		domains:   domains,
@@ -162,6 +167,7 @@ func main() {
 		brute:     flBrute,
 		bruteFull: flBruteFull,
 		perm:      flPerm2,
+		permDeep:  flPermDeep,
 		asn:       flAsn,
 		tls:       flTls,
 		vhost:     flVhost,
@@ -314,7 +320,8 @@ DISCOVERY:
   -all             enable all passive sources
   -brute           DNS bruteforce — fast top-100k of the DNS wordlist (~1 min)
   -brute-full      DNS bruteforce — the FULL 9.5M wordlist (~25-30 min)
-  -perm            permutation / mutation discovery
+  -perm            permutation / mutation (samples ~5k seeds on huge domains)
+  -perm-deep       permutation over ALL seeds — slow on huge domains
   -asn             ASN + reverse-DNS sweep
   -github          give github-subdomains extra time (5m thorough dig; it already
                    runs by default when a token is set — add more for speed)
