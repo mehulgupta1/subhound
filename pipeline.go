@@ -415,8 +415,12 @@ func passiveStage(cfg config, domain string) []srcResult {
 		if cfg.github {
 			to = 5 * time.Minute
 		}
+		// -raw = plain hostnames on stdout (default output is "[time] host" which our
+		// hostname parser rejects — that was the "github found 0" bug). -o to a temp
+		// file so it doesn't drop <domain>.txt in the working dir.
+		ghOut := filepath.Join(os.TempDir(), "subhound-gh-"+domain+".txt")
 		jobs = append(jobs, job{name: fmt.Sprintf("github-subdomains(%dtok)", n), bin: "github-subdomains",
-			args: []string{"-d", domain, "-t", toks}, timeout: to})
+			args: []string{"-d", domain, "-t", toks, "-raw", "-o", ghOut}, timeout: to})
 	} else if cfg.github {
 		fmt.Fprintf(os.Stderr, "  %s⚠%s  -github set but no token — add one with `subhound -config`\n", red(), reset)
 	}
