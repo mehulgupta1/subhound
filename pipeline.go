@@ -194,7 +194,7 @@ func runPipeline(cfg config, domain string) int {
 
 	dir := cfg.outDir
 	if dir == "" {
-		dir = "subhound-" + domain // stable per-domain dir — re-runs reuse it, no clutter
+		dir = domain // output folder = the domain itself (e.g. tesla.com/) — re-runs reuse it
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "[!] cannot create output dir %s: %v\n", dir, err)
@@ -358,9 +358,7 @@ func runPipeline(cfg config, domain string) int {
 			}
 		}
 		if len(fresh) > 0 {
-			sort.Strings(fresh)
-			writeLines(filepath.Join(dir, "new.txt"), fresh)
-			logf(cfg.silent, "    %s🆕%s %d new since last scan → %s/new.txt", green(), reset, len(fresh), dir)
+			logf(cfg.silent, "    %s🆕%s %d new since last scan", green(), reset, len(fresh))
 		} else {
 			logf(cfg.silent, "    no new subdomains since last scan")
 		}

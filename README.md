@@ -157,8 +157,8 @@ heavier stages (`-brute`, `-perm`, `-asn`, `-tls`, `-vhost`) are opt-in.
 
 ## Output
 
-Each run writes to a **stable per-domain folder** `subhound-<domain>/` (re-running
-the same domain reuses it — no clutter), containing:
+Each run writes to a folder named after the target — `tesla.com/` — reused on
+every re-run (no clutter), containing:
 
 | File | Contents |
 |---|---|
@@ -166,11 +166,10 @@ the same domain reuses it — no clutter), containing:
 | `resolved.txt` | resolved hosts with their IPs (`host  ip1,ip2`) |
 | `alive.txt` | live HTTP(S) hosts, human-readable |
 | `alive.json` | live hosts as raw httpx JSON (for piping/parsing) |
-| `new.txt` | **subdomains that are new since the last scan** (monitoring) |
 | `vhosts.json` | virtual-host findings (only with `-vhost`) |
 
-Because the folder is stable, **re-scanning a domain reports what's new** — the
-summary prints `🆕 N new since last scan` and writes them to `new.txt`.
+Because the folder is reused, **re-scanning a domain reports what's new** — the
+summary prints `🆕 N new since last scan` (compared against the previous run).
 
 Results are saved **incrementally after each stage**, so if you hit `Ctrl-C`
 (or a crash), whatever finished so far is already on disk.
