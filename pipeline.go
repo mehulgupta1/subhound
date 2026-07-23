@@ -194,13 +194,16 @@ func runPipeline(cfg config, domain string) int {
 
 	dir := cfg.outDir
 	if dir == "" {
-		dir = fmt.Sprintf("subhound-%s-%s", domain, timestamp())
+		dir = "subhound-" + domain // stable per-domain dir — re-runs reuse it, no clutter
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "[!] cannot create output dir %s: %v\n", dir, err)
 		return 1
 	}
 	currentDir.Store(dir) // for the interrupt handler
+	// remember the previous run's names BEFORE save() overwrites the file, so we can
+	// report what's NEW this run — repeat scans of a domain become monitoring.
+	prev := loadNameSet(filepath.Join(dir, "all-subdomains.txt"))
 
 	// default to the bundled trusted resolvers unless the user supplied their own
 	if cfg.resolvers == "" {
@@ -345,6 +348,23 @@ func runPipeline(cfg config, domain string) int {
 	stopHeartbeat()
 	logf(cfg.silent, "%s[✓]%s done — all:%d  resolved:%d  alive:%d", bold, reset, len(all), len(resolved), aliveCount)
 	logf(cfg.silent, "    results in %s/", dir)
+
+	// what's NEW since the last scan of this domain (monitoring on repeat runs)
+	if len(prev) > 0 {
+		var fresh []string
+		for _, n := range all {
+			if _, ok := prev[n]; !ok {
+				fresh = append(fresh, n)
+			}
+		}
+		if len(fresh) > 0 {
+			sort.Strings(fresh)
+			writeLines(filepath.Join(dir, "new.txt"), fresh)
+			logf(cfg.silent, "    %s🆕%s %d new since last scan → %s/new.txt", green(), reset, len(fresh), dir)
+		} else {
+			logf(cfg.silent, "    no new subdomains since last scan")
+		}
+	}
 
 	// 0 results is almost always a mode issue, not a real "nothing exists" — say why
 	// so an empty scan never looks like a silent failure.
@@ -1298,6 +1318,22 @@ func splitLines(s string) []string {
 		}
 	}
 	return out
+}
+
+// loadNameSet reads a newline-delimited file into a set — used to diff this run's
+// names against the previous run's ("new since last scan"). Missing file → empty.
+func loadNameSet(path string) map[string]struct{} {
+	m := map[string]struct{}{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return m
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if s := strings.TrimSpace(ln); s != "" {
+			m[s] = struct{}{}
+		}
+	}
+	return m
 }
 
 func writeLines(path string, lines []string) {

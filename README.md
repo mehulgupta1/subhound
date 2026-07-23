@@ -26,20 +26,19 @@ checks which are alive over HTTP(S), and writes clean result files — with
 ## Install
 
 ```bash
-# 1. get the code
-git clone https://github.com/mehulgupta1/subhound.git
-cd subhound
+# 1. install subhound globally (needs Go) — just like subfinder/httpx
+go install github.com/mehulgupta1/subhound@latest
 
-# 2. build the binary (needs Go)
-go build -o subhound .
+# 2. install the recon tools it calls (subfinder, dnsx, httpx, massdns, …)
+subhound -setup
 
-# 3. install the recon tools it calls (subfinder, dnsx, httpx, …)
-./subhound -setup
+# 3. run from anywhere
+subhound -d target.com
 ```
 
-`-setup` is **idempotent** (only installs what's missing) and **fail-soft**
-(an optional tool failing never aborts the rest). After it finishes, add Go's
-bin dir to your PATH if it isn't already:
+`subhound` is now a global command (no `./`, no cloning). `-setup` is
+**idempotent** (only installs what's missing) and **fail-soft** (an optional
+tool failing never aborts the rest). Make sure Go's bin dir is on your PATH:
 
 ```bash
 export PATH="$PATH:$(go env GOPATH)/bin"
@@ -158,7 +157,8 @@ heavier stages (`-brute`, `-perm`, `-asn`, `-tls`, `-vhost`) are opt-in.
 
 ## Output
 
-Each run writes a folder `subhound-<domain>-<timestamp>/` containing:
+Each run writes to a **stable per-domain folder** `subhound-<domain>/` (re-running
+the same domain reuses it — no clutter), containing:
 
 | File | Contents |
 |---|---|
@@ -166,7 +166,11 @@ Each run writes a folder `subhound-<domain>-<timestamp>/` containing:
 | `resolved.txt` | resolved hosts with their IPs (`host  ip1,ip2`) |
 | `alive.txt` | live HTTP(S) hosts, human-readable |
 | `alive.json` | live hosts as raw httpx JSON (for piping/parsing) |
+| `new.txt` | **subdomains that are new since the last scan** (monitoring) |
 | `vhosts.json` | virtual-host findings (only with `-vhost`) |
+
+Because the folder is stable, **re-scanning a domain reports what's new** — the
+summary prints `🆕 N new since last scan` and writes them to `new.txt`.
 
 Results are saved **incrementally after each stage**, so if you hit `Ctrl-C`
 (or a crash), whatever finished so far is already on disk.
