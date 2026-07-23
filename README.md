@@ -28,6 +28,8 @@ checks which are alive over HTTP(S), and writes clean result files — with
 ```bash
 # 1. install subhound globally (needs Go) — just like subfinder/httpx
 go install github.com/mehulgupta1/subhound@latest
+# if that errors with a checksum/500 (common right after a new release):
+#   GOPROXY=direct go install github.com/mehulgupta1/subhound@latest
 
 # 2. install the recon tools it calls (subfinder, dnsx, httpx, massdns, …)
 subhound -setup
