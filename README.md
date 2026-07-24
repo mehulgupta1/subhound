@@ -19,13 +19,18 @@ checks which are alive over HTTP(S), and writes clean result files — with
 ## Requirements
 
 - **Linux or macOS** (Windows is not supported — the recon tools are \*nix-only)
-- **Go** — installed automatically by `-setup` if you don't have it
+- **Go** — needed for the one-line `go install` below. No Go? Grab it with
+  `bash <(curl -sL https://git.io/go-installer)`
 
 ---
 
 ## Install
 
 ```bash
+# 0. don't have Go? one-line installer (sets up Go + PATH):
+bash <(curl -sL https://git.io/go-installer)
+#    then reload your shell (or `source ~/.bashrc`) so `go` is on PATH
+
 # 1. install subhound globally (needs Go) — just like subfinder/httpx
 go install github.com/mehulgupta1/subhound@latest
 # if that errors with a checksum/500 (common right after a new release):
