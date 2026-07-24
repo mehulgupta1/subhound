@@ -364,7 +364,7 @@ OPTIONS:
   -json            also emit JSON
   -silent          print subdomains only — no banner/logs (pipe-friendly)
   -setup           install/verify tools, then exit
-  -config          save API keys into subfinder config
+  -config          save subhound's own tokens (github-subdomains + asnmap) to ~/.subhound/config.yaml
   -version         print version
   -h, -help        show this help
 

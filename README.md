@@ -73,17 +73,26 @@ automatically. Cap the guesses per round with `-perm-limit` (default 300000).
 
 ## API keys (optional, but recommended)
 
-Some passive sources return **far more** results with a free API key. Store
-them once:
+There are **two** separate key stores, and SubHound keeps them separate on
+purpose:
+
+**1. subfinder's own keys** — Chaos, VirusTotal, SecurityTrails, etc. live in
+subfinder's official config (`~/.config/subfinder/provider-config.yaml`). Set
+them the normal subfinder way. **SubHound never edits this file.**
+
+**2. SubHound's own tokens** — for the tools SubHound calls directly
+(`github-subdomains` and `asnmap`). Store these once:
 
 ```bash
-./subhound -config
+subhound -config
 ```
 
-It asks for (blank to skip): **Chaos/PDCP**, **GitHub token**,
-**SecurityTrails**, **VirusTotal** — and writes them where the tools read them
-(subfinder's `provider-config.yaml`). The **Chaos/PDCP** key also enables the
-ASN sweep (`asnmap`), so add it if you want `-asn`.
+It asks for **GitHub token(s)** (for `github-subdomains` — comma-separate
+several for more rate-limit buckets) and the **Chaos/PDCP key** (for the `-asn`
+sweep via `asnmap`), and writes them to **`~/.subhound/config.yaml`** — its own
+file, never subfinder's. Pressing Enter keeps whatever's already saved. For
+convenience SubHound will also *read* (never write) tokens already in
+subfinder's config as a fallback, so existing setups keep working.
 
 ---
 

@@ -478,16 +478,19 @@ func subfinderKey(provider string) string {
 	return ""
 }
 
-// githubTokens returns ALL GitHub tokens for github-subdomains, comma-joined:
-// GITHUB_TOKEN env (itself may be comma/space/newline-separated) plus every token
-// listed under `github:` in subfinder's config. More tokens = more rate-limit
-// buckets = much faster (github-subdomains rotates across them).
+// githubTokens returns ALL GitHub tokens for github-subdomains, comma-joined, from
+// (in order): GITHUB_TOKEN env, subhound's own config (~/.subhound/config.yaml
+// `github:`), and — read-only, for continuity — subfinder's config. subhound's
+// config is the intended home; the subfinder read is a fallback so existing setups
+// keep working. More tokens = more rate-limit buckets = faster (it rotates them).
 func githubTokens() string {
-	var toks []string
 	split := func(s string) []string {
 		return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' })
 	}
+	var toks []string
 	toks = append(toks, split(os.Getenv("GITHUB_TOKEN"))...)
+	toks = append(toks, split(readSubhoundConfig()["github"])...)
+	// read-only fallback: subfinder's github: list (subhound never writes it)
 	home, _ := os.UserHomeDir()
 	if b, err := os.ReadFile(filepath.Join(home, ".config", "subfinder", "provider-config.yaml")); err == nil {
 		in := false
@@ -514,10 +517,13 @@ func githubTokens() string {
 	return strings.Join(out, ",")
 }
 
-// pdcpKey: PDCP_API_KEY env (asnmap reads this), else the Chaos/PDCP key saved
-// via `subhound -config`.
+// pdcpKey for asnmap (-asn), in order: PDCP_API_KEY env, subhound's own config
+// (chaos key), then — read-only — subfinder's chaos key as a fallback.
 func pdcpKey() string {
 	if t := strings.TrimSpace(os.Getenv("PDCP_API_KEY")); t != "" {
+		return t
+	}
+	if t := strings.TrimSpace(readSubhoundConfig()["chaos"]); t != "" {
 		return t
 	}
 	return subfinderKey("chaos")
