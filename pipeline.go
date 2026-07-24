@@ -1292,10 +1292,21 @@ func loadExcluder(spec string) *excluder {
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
 		}
-		// exact hostnames are valid regexes too; anchor them so "a.com" doesn't match "ba.com"
-		pat := l
-		if hostRe.MatchString(strings.ToLower(l)) {
-			pat = "^" + regexp.QuoteMeta(strings.ToLower(l)) + "$"
+		var pat string
+		switch {
+		case strings.HasPrefix(l, "re:"):
+			// explicit-regex escape hatch for power users — compiled as-is, unanchored.
+			pat = strings.TrimSpace(l[len("re:"):])
+		case strings.Contains(l, "."):
+			// a domain (akamai.com, api.tesla.com): drop it AND any subdomain of it,
+			// but never a lookalike — "akamai.com" won't match "notakamai.com".
+			pat = `(^|\.)` + regexp.QuoteMeta(strings.ToLower(l)) + `$`
+		default:
+			// a bare label (akamai, api): match only as a WHOLE dotted label, so it
+			// drops api.x.com and x.api.com but never rapids.x.com (no substring hits).
+			// The old code anchored bare words to ^word$, which matched no FQDN at all
+			// (a silent no-op); QuoteMeta also keeps stray regex chars literal.
+			pat = `(^|\.)` + regexp.QuoteMeta(strings.ToLower(l)) + `(\.|$)`
 		}
 		if re, err := regexp.Compile(pat); err == nil {
 			e.res = append(e.res, re)
