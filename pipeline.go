@@ -887,11 +887,6 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 var ipRe = regexp.MustCompile(`(\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{2,}:[0-9a-fA-F:]+`)
 var cidrRe = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$`)
 
-// asnIPCap limits reverse-DNS work — a big ASN can expand to hundreds of
-// thousands of IPs; scanning all is too slow, so we cap + warn. (CDN ranges like
-// Cloudflare are huge AND unproductive since the IPs aren't owned by the target.)
-const asnIPCap = 16384
-
 // asnStage: domain → ASN CIDRs (asnmap) → IPs (mapcidr) → reverse-DNS (dnsx -ptr),
 // filtered back to the target. asnmap needs a ProjectDiscovery API key; if missing
 // it's surfaced clearly (never a silent false-zero).
@@ -938,9 +933,12 @@ func asnStage(cfg config, domain, dir string) []string {
 			ips = append(ips, ip)
 		}
 	}
-	if len(ips) > asnIPCap {
-		fmt.Fprintf(os.Stderr, "  %s⚠%s  %d IPs in ASN space — capping reverse-DNS to first %d\n", red(), reset, len(ips), asnIPCap)
-		ips = ips[:asnIPCap]
+	totalIPs := len(ips)
+	capped := false
+	if cfg.asnLimit > 0 && len(ips) > cfg.asnLimit {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  %d IPs in ASN space — capping reverse-DNS to first %d (-asn-full for all)\n", red(), reset, len(ips), cfg.asnLimit)
+		ips = ips[:cfg.asnLimit]
+		capped = true
 	}
 	logf(cfg.silent, "  reverse-DNS on %d IPs", len(ips))
 
@@ -975,6 +973,12 @@ func asnStage(cfg config, domain, dir string) []string {
 	if len(out) > 0 && inScope == 0 {
 		fmt.Fprintf(os.Stderr, "  %s⚠%s  reverse-DNS resolved %d hosts, all under %s (not %s) — this ASN's PTRs point to CDN/host infra, not %s's own subdomains\n",
 			red(), reset, len(out), parentDomain(out[0]), domain, domain)
+	}
+	// If we DID find in-scope names AND hit the cap, there may be more past it —
+	// this is the one case where -asn-full pays off (self-hosted target).
+	if capped && inScope > 0 {
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  found %d in-scope names but only checked %d of %d IPs — run -asn-full to reverse-DNS them all\n",
+			red(), reset, inScope, cfg.asnLimit, totalIPs)
 	}
 	return out
 }

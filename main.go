@@ -67,22 +67,23 @@ type config struct {
 	json       bool
 	silent     bool
 	permLimit  int  // -perm-limit: max alterx guesses per round (0 = unlimited)
+	asnLimit   int  // -asn-limit: max IPs to reverse-DNS in ASN (0 = all; -asn-full)
 	github     bool // -github: run github-subdomains (slow/rate-limited, opt-in)
 }
 
 func main() {
 	var (
-		flDomain, flList                           string
-		flWord, flPerm, flResolvers, flExclude     string
-		flVhostWords                               string
-		flOut                                      string
-		flThreads                                  int
-		flAll, flBrute, flPerm2, flAsn, flTls      bool
-		flVhost, flRecursive                       bool
-		flNoPassive, flNoProbe                     bool
-		flJSON, flSilent, flSetup, flConfig, flVer bool
-		flPermLimit                                int
-		flBruteFull, flGithub, flPermDeep          bool
+		flDomain, flList                             string
+		flWord, flPerm, flResolvers, flExclude       string
+		flVhostWords                                 string
+		flOut                                        string
+		flThreads                                    int
+		flAll, flBrute, flPerm2, flAsn, flTls        bool
+		flVhost, flRecursive                         bool
+		flNoPassive, flNoProbe                       bool
+		flJSON, flSilent, flSetup, flConfig, flVer   bool
+		flPermLimit, flAsnLimit                      int
+		flBruteFull, flGithub, flPermDeep, flAsnFull bool
 	)
 
 	flag.StringVar(&flDomain, "d", "", "")
@@ -98,6 +99,8 @@ func main() {
 	flag.BoolVar(&flPerm2, "perm", false, "")
 	flag.BoolVar(&flPermDeep, "perm-deep", false, "")
 	flag.BoolVar(&flAsn, "asn", false, "")
+	flag.BoolVar(&flAsnFull, "asn-full", false, "")
+	flag.IntVar(&flAsnLimit, "asn-limit", 16384, "")
 	flag.BoolVar(&flTls, "tls", false, "")
 	flag.BoolVar(&flVhost, "vhost", false, "")
 	flag.BoolVar(&flRecursive, "recursive", false, "")
@@ -157,6 +160,10 @@ func main() {
 	if flPermDeep {
 		flPerm2 = true // -perm-deep implies permutation
 	}
+	if flAsnFull {
+		flAsn = true   // -asn-full implies ASN
+		flAsnLimit = 0 // 0 = no cap: reverse-DNS every IP
+	}
 
 	cfg := config{
 		domains:    domains,
@@ -181,6 +188,7 @@ func main() {
 		json:       flJSON,
 		silent:     flSilent,
 		permLimit:  flPermLimit,
+		asnLimit:   flAsnLimit,
 		github:     flGithub,
 	}
 
@@ -326,7 +334,8 @@ DISCOVERY:
   -brute-full      DNS bruteforce — the FULL 9.5M wordlist (~25-30 min)
   -perm            permutation / mutation (samples ~5k seeds on huge domains)
   -perm-deep       permutation over ALL seeds — slow on huge domains
-  -asn             ASN + reverse-DNS sweep
+  -asn             ASN + reverse-DNS sweep (first 16k IPs)
+  -asn-full        ASN reverse-DNS over ALL IPs (self-hosted targets; slower)
   -github          give github-subdomains extra time (5m thorough dig; it already
                    runs by default when a token is set — add more for speed)
   -recursive       extra brute/perm pass over newly found subs
@@ -343,6 +352,7 @@ OPTIONS:
   -w,  -wordlist   wordlist for -brute   (default: Assetnote, via -setup)
   -pw, -perm-words token list for -perm  (default: bundled)
   -perm-limit      max -perm guesses per round  (default 300000, 0 = unlimited)
+  -asn-limit       max IPs to reverse-DNS in -asn  (default 16384, 0 = all)
   -vhost-words     wordlist for -vhost   (default: top-5k of the DNS list)
   -r,  -resolvers  custom resolvers file
   -t,  -threads    concurrency               (default 100)
