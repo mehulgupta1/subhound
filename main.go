@@ -45,34 +45,36 @@ func disableColors() {
 
 // config holds resolved flags/modes for a run.
 type config struct {
-	domains   []string
-	wordlist  string
-	permWords string
-	resolvers string
-	exclude   string
-	outDir    string
-	threads   int
-	all       bool
-	brute     bool
-	bruteFull bool // -brute-full: brute the full 9.5M list (else a fast top-slice)
-	perm      bool
-	permDeep  bool // -perm-deep: permute ALL seeds (else sample ~5k)
-	asn       bool
-	tls       bool
-	vhost     bool
-	recursive bool
-	passive   bool // default true, off with -no-passive
-	probe     bool // default true, off with -np
-	json      bool
-	silent    bool
-	permLimit int  // -perm-limit: max alterx guesses per round (0 = unlimited)
-	github    bool // -github: run github-subdomains (slow/rate-limited, opt-in)
+	domains    []string
+	wordlist   string
+	permWords  string
+	vhostWords string // -vhost-words: dedicated vhost list (else top-5k of default)
+	resolvers  string
+	exclude    string
+	outDir     string
+	threads    int
+	all        bool
+	brute      bool
+	bruteFull  bool // -brute-full: brute the full 9.5M list (else a fast top-slice)
+	perm       bool
+	permDeep   bool // -perm-deep: permute ALL seeds (else sample ~5k)
+	asn        bool
+	tls        bool
+	vhost      bool
+	recursive  bool
+	passive    bool // default true, off with -no-passive
+	probe      bool // default true, off with -np
+	json       bool
+	silent     bool
+	permLimit  int  // -perm-limit: max alterx guesses per round (0 = unlimited)
+	github     bool // -github: run github-subdomains (slow/rate-limited, opt-in)
 }
 
 func main() {
 	var (
 		flDomain, flList                           string
 		flWord, flPerm, flResolvers, flExclude     string
+		flVhostWords                               string
 		flOut                                      string
 		flThreads                                  int
 		flAll, flBrute, flPerm2, flAsn, flTls      bool
@@ -108,6 +110,7 @@ func main() {
 	flag.StringVar(&flWord, "wordlist", "", "")
 	flag.StringVar(&flPerm, "pw", "", "")
 	flag.StringVar(&flPerm, "perm-words", "", "")
+	flag.StringVar(&flVhostWords, "vhost-words", "", "")
 	flag.StringVar(&flResolvers, "r", "", "")
 	flag.StringVar(&flResolvers, "resolvers", "", "")
 	flag.IntVar(&flThreads, "t", 100, "")
@@ -156,28 +159,29 @@ func main() {
 	}
 
 	cfg := config{
-		domains:   domains,
-		wordlist:  flWord,
-		permWords: flPerm,
-		resolvers: flResolvers,
-		exclude:   flExclude,
-		outDir:    flOut,
-		threads:   flThreads,
-		all:       flAll,
-		brute:     flBrute,
-		bruteFull: flBruteFull,
-		perm:      flPerm2,
-		permDeep:  flPermDeep,
-		asn:       flAsn,
-		tls:       flTls,
-		vhost:     flVhost,
-		recursive: flRecursive,
-		passive:   !flNoPassive,
-		probe:     !flNoProbe,
-		json:      flJSON,
-		silent:    flSilent,
-		permLimit: flPermLimit,
-		github:    flGithub,
+		domains:    domains,
+		wordlist:   flWord,
+		permWords:  flPerm,
+		vhostWords: flVhostWords,
+		resolvers:  flResolvers,
+		exclude:    flExclude,
+		outDir:     flOut,
+		threads:    flThreads,
+		all:        flAll,
+		brute:      flBrute,
+		bruteFull:  flBruteFull,
+		perm:       flPerm2,
+		permDeep:   flPermDeep,
+		asn:        flAsn,
+		tls:        flTls,
+		vhost:      flVhost,
+		recursive:  flRecursive,
+		passive:    !flNoPassive,
+		probe:      !flNoProbe,
+		json:       flJSON,
+		silent:     flSilent,
+		permLimit:  flPermLimit,
+		github:     flGithub,
 	}
 
 	installInterruptHandler() // Ctrl-C → keep partial results, exit clean
@@ -339,6 +343,7 @@ OPTIONS:
   -w,  -wordlist   wordlist for -brute   (default: Assetnote, via -setup)
   -pw, -perm-words token list for -perm  (default: bundled)
   -perm-limit      max -perm guesses per round  (default 300000, 0 = unlimited)
+  -vhost-words     wordlist for -vhost   (default: top-5k of the DNS list)
   -r,  -resolvers  custom resolvers file
   -t,  -threads    concurrency               (default 100)
   -o,  -output     output directory

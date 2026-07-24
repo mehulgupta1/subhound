@@ -143,8 +143,9 @@ heavier stages (`-brute`, `-perm`, `-asn`, `-tls`, `-vhost`) are opt-in.
 ### Options
 | Flag | What it does |
 |---|---|
-| `-w`, `-wordlist` | wordlist for `-brute` (default: bundled) |
+| `-w`, `-wordlist` | wordlist for `-brute` (default: Assetnote, via `-setup`) |
 | `-pw`, `-perm-words` | token list for `-perm` (default: bundled) |
+| `-vhost-words` | wordlist for `-vhost` (default: top-5k — vhost sends live HTTP, so it stays small) |
 | `-r`, `-resolvers` | custom DNS resolvers file |
 | `-t`, `-threads` | concurrency (default 100) |
 | `-o`, `-output` | output directory |

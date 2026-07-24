@@ -541,15 +541,15 @@ func subfinderArgs(cfg config, domain string) []string {
 // -brute-full uses the whole 9.5M list.
 const bruteFastLimit = 100000
 
-// topLines writes the first n lines of src to a temp file, returning its path
-// ("" on error) — used to slice the huge default wordlist for a fast -brute.
-func topLines(src string, n int, dir string) string {
+// topLines writes the first n lines of src to dir/tmpName, returning its path
+// ("" on error) — used to slice the huge default wordlist for -brute and -vhost.
+func topLines(src string, n int, dir, tmpName string) string {
 	f, err := os.Open(src)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
-	out := filepath.Join(dir, ".brute-slice.tmp")
+	out := filepath.Join(dir, tmpName)
 	w, err := os.Create(out)
 	if err != nil {
 		return ""
@@ -572,7 +572,7 @@ func bruteStage(cfg config, domain, dir string) []string {
 	// Fast -brute uses the top slice of the frequency-sorted default list (~1 min);
 	// the full 9.5M is opt-in via -brute-full. A user-supplied -w is used whole.
 	if cfg.wordlist == "" && !cfg.bruteFull {
-		if s := topLines(wl, bruteFastLimit, dir); s != "" {
+		if s := topLines(wl, bruteFastLimit, dir, ".brute-slice.tmp"); s != "" {
 			wl = s
 			defer os.Remove(s)
 		}
@@ -1009,6 +1009,26 @@ func harvestInto(cfg config, domain string, set map[string]struct{}, excl *exclu
 	return len(fresh)
 }
 
+// vhostWordCap is the vhost wordlist size. vhost sends a live HTTP request PER
+// word, so it uses a small list (the community standard ~5k) — the full DNS list
+// would fire millions of requests and take hours (and hammer the target).
+const vhostWordCap = 5000
+
+// vhostWordlist returns the vhost wordlist: -vhost-words if set, else the top-5000
+// of the default DNS list (frequency-sorted → the common vhost names). It never
+// uses brute's -w or the full 9.5M list.
+func vhostWordlist(cfg config, dir string) (string, func()) {
+	if cfg.vhostWords != "" {
+		return cfg.vhostWords, func() {}
+	}
+	base, bc := wordlistPath("", dir) // default DNS list (or bundled fallback)
+	if s := topLines(base, vhostWordCap, dir, ".vhost-slice.tmp"); s != "" {
+		bc() // done with the base; we use the slice
+		return s, func() { os.Remove(s) }
+	}
+	return base, bc // fallback: use base whole (bundled list is already small)
+}
+
 // vhostStage bruteforces virtual hosts against a target IP with Host: FUZZ.domain.
 // Best against a raw origin server; on CDN/shared IPs results are limited.
 func vhostStage(cfg config, domain string, resolved map[string][]string, dir string) []string {
@@ -1038,7 +1058,7 @@ func vhostStage(cfg config, domain string, resolved map[string][]string, dir str
 	}
 	logf(cfg.silent, "  target IP %s", ip)
 
-	wl, cleanup := wordlistPath(cfg.wordlist, dir)
+	wl, cleanup := vhostWordlist(cfg, dir)
 	defer cleanup()
 	outJSON := filepath.Join(dir, "vhosts.json")
 	args := []string{"-w", wl + ":FUZZ", "-u", "https://" + ip + "/",
