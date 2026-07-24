@@ -166,7 +166,7 @@ func passiveTimeout(cfg config) time.Duration {
 	// self-terminates gracefully with partial results instead of being SIGKILLed
 	// at this wall — a SIGKILL would read as a hard error and drop the source.
 	if cfg.all {
-		return 270 * time.Second // subfinder -max-time 4m (240s) + margin
+		return 330 * time.Second // subfinder -max-time 5m (300s) + margin
 	}
 	return 90 * time.Second // subfinder -max-time 1m (60s) + margin
 }
@@ -524,7 +524,7 @@ func subfinderArgs(cfg config, domain string) []string {
 	// the whole source reads as an error and its results are lost.
 	timeout, maxTime := "15", "1"
 	if cfg.all {
-		timeout, maxTime = "30", "4" // -all queries more sources; give them longer
+		timeout, maxTime = "30", "5" // -all queries more sources; give them longer
 	}
 	a := []string{"-d", domain, "-silent", "-timeout", timeout, "-max-time", maxTime}
 	if cfg.all {
@@ -1213,6 +1213,12 @@ func parseDnsxResp(ln string) (host, ip string) {
 // stdinNull closes stdin so a tool that would prompt gets EOF and bails.
 func runStream(ctx context.Context, stdinNull bool, bin string, args ...string) (out []string, stderr string, err error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// Graceful cancel: at the timeout wall send SIGTERM (not the default SIGKILL) so
+	// the tool catches it and FLUSHES its partial results before exiting — subfinder
+	// with a hung source then returns "N (partial)" instead of dying empty with
+	// "signal: killed". WaitDelay is the hard backstop if it ignores SIGTERM.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 15 * time.Second
 	if stdinNull {
 		cmd.Stdin = nil
 	}
