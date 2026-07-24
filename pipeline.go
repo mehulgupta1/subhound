@@ -337,9 +337,15 @@ func runPipeline(cfg config, domain string) int {
 	// ---- PROBE ----
 	aliveCount := 0
 	if cfg.probe {
-		setStage(fmt.Sprintf("probing %s hosts", commafy(int64(len(resolved)))))
+		// -probe-all feeds httpx every discovered name (httpx does its own DNS, so it
+		// can catch live hosts dnsx dropped); default probes only resolved names (fast).
+		probeTargets := sortedKeys(resolved)
+		if cfg.probeAll {
+			probeTargets = all
+		}
+		setStage(fmt.Sprintf("probing %s hosts", commafy(int64(len(probeTargets)))))
 		logf(cfg.silent, "[3] PROBE (httpx)")
-		aliveCount = probeStage(cfg, sortedKeys(resolved), dir)
+		aliveCount = probeStage(cfg, probeTargets, dir)
 		logf(cfg.silent, "  → %d alive hosts", aliveCount)
 		logf(cfg.silent, "")
 	}

@@ -64,6 +64,7 @@ type config struct {
 	recursive  bool
 	passive    bool // default true, off with -no-passive
 	probe      bool // default true, off with -np
+	probeAll   bool // -probe-all: probe every discovered name (not just resolved)
 	json       bool
 	silent     bool
 	permLimit  int  // -perm-limit: max alterx guesses per round (0 = unlimited)
@@ -80,7 +81,7 @@ func main() {
 		flThreads                                    int
 		flAll, flBrute, flPerm2, flAsn, flTls        bool
 		flVhost, flRecursive                         bool
-		flNoPassive, flNoProbe                       bool
+		flNoPassive, flNoProbe, flProbeAll           bool
 		flJSON, flSilent, flSetup, flConfig, flVer   bool
 		flPermLimit, flAsnLimit                      int
 		flBruteFull, flGithub, flPermDeep, flAsnFull bool
@@ -108,6 +109,7 @@ func main() {
 	flag.BoolVar(&flNoPassive, "no-passive", false, "")
 	flag.BoolVar(&flNoProbe, "np", false, "")
 	flag.BoolVar(&flNoProbe, "no-probe", false, "")
+	flag.BoolVar(&flProbeAll, "probe-all", false, "")
 
 	flag.StringVar(&flWord, "w", "", "")
 	flag.StringVar(&flWord, "wordlist", "", "")
@@ -185,6 +187,7 @@ func main() {
 		recursive:  flRecursive,
 		passive:    !flNoPassive,
 		probe:      !flNoProbe,
+		probeAll:   flProbeAll,
 		json:       flJSON,
 		silent:     flSilent,
 		permLimit:  flPermLimit,
@@ -347,6 +350,7 @@ PROBE & EXTRAS:
 TOGGLES (turn default stages off — solo-mode):
   -no-passive      skip passive sources
   -np, -no-probe   skip the HTTP probe (probe runs by DEFAULT)
+  -probe-all       probe EVERY discovered name, not just resolved (slower, thorough)
 
 OPTIONS:
   -w,  -wordlist   wordlist for -brute   (default: Assetnote, via -setup)
