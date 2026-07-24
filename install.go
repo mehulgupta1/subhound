@@ -15,47 +15,65 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
 // runConfig interactively stores API keys where the tools read them:
 // subfinder's provider-config.yaml, plus hints for the env-var-based tools.
 func runConfig() int {
-	r := bufio.NewReader(os.Stdin)
-	ask := func(label string) string {
-		fmt.Fprintf(os.Stderr, "  %-22s: ", label)
-		s, _ := r.ReadString('\n')
-		return strings.TrimSpace(s)
-	}
-	fmt.Fprintln(os.Stderr, "[*] SubHound config — enter API keys (blank to skip)")
-	chaos := ask("Chaos / PDCP key")
-	github := ask("GitHub token(s) — comma-separated for multiple (faster -github)")
-	st := ask("SecurityTrails key")
-	vt := ask("VirusTotal key")
-
-	// subfinder provider-config.yaml — comma-separated values become a YAML list
-	// (github/chaos accept multiple; more github tokens = faster github-subdomains).
-	var b strings.Builder
-	add := func(name, val string) {
-		if val = strings.TrimSpace(val); val == "" {
-			return
-		}
-		fmt.Fprintf(&b, "%s:\n", name)
-		for _, v := range strings.Split(val, ",") {
-			if v = strings.TrimSpace(v); v != "" {
-				fmt.Fprintf(&b, "  - %s\n", v)
-			}
-		}
-	}
-	add("chaos", chaos)
-	add("github", github)
-	add("securitytrails", st)
-	add("virustotal", vt)
-
 	home, _ := os.UserHomeDir()
 	cfgDir := filepath.Join(home, ".config", "subfinder")
-	os.MkdirAll(cfgDir, 0o755)
 	path := filepath.Join(cfgDir, "provider-config.yaml")
+
+	// Load whatever's already saved so we MERGE (never wipe) — the old version
+	// overwrote the file, so leaving a prompt blank silently deleted that key.
+	cfg := parseProviderConfig(path)
+
+	r := bufio.NewReader(os.Stdin)
+	// ask shows the saved value (masked) and treats blank as "keep it". Only a
+	// non-blank entry replaces. Returns the value to store for this provider.
+	ask := func(provider, label string) []string {
+		cur := cfg[provider]
+		hint := "not set"
+		if len(cur) == 1 {
+			hint = "saved: " + mask(cur[0]) + " — Enter to keep"
+		} else if len(cur) > 1 {
+			hint = fmt.Sprintf("saved: %d keys — Enter to keep", len(cur))
+		}
+		fmt.Fprintf(os.Stderr, "  %-26s [%s]: ", label, hint)
+		s, _ := r.ReadString('\n')
+		if s = strings.TrimSpace(s); s == "" {
+			return cur // keep existing
+		}
+		var vals []string
+		for _, v := range strings.Split(s, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				vals = append(vals, v)
+			}
+		}
+		return vals
+	}
+	fmt.Fprintln(os.Stderr, "[*] SubHound config — Enter keeps the saved value, or type a new one to replace")
+	cfg["chaos"] = ask("chaos", "Chaos / PDCP key")
+	cfg["github"] = ask("github", "GitHub token(s) — comma-separated")
+	cfg["securitytrails"] = ask("securitytrails", "SecurityTrails key")
+	cfg["virustotal"] = ask("virustotal", "VirusTotal key")
+
+	// Render the merged config back (providers we didn't prompt for are preserved).
+	var b strings.Builder
+	for _, name := range sortedProviders(cfg) {
+		vals := cfg[name]
+		if len(vals) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s:\n", name)
+		for _, v := range vals {
+			fmt.Fprintf(&b, "  - %s\n", v)
+		}
+	}
+
+	os.MkdirAll(cfgDir, 0o755)
 	if b.Len() > 0 {
 		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "[!] cannot write %s: %v\n", path, err)
@@ -63,9 +81,10 @@ func runConfig() int {
 		}
 		fmt.Fprintf(os.Stderr, "[✓] wrote %s\n", path)
 	} else {
-		fmt.Fprintln(os.Stderr, "[*] no keys entered — nothing written")
+		fmt.Fprintln(os.Stderr, "[*] no keys set — nothing written")
 		return 0
 	}
+	chaos, github := first(cfg["chaos"]), strings.Join(cfg["github"], ",")
 
 	// env-var-based tools need exports (persist them in your shell rc)
 	fmt.Fprintln(os.Stderr, "\n[*] also add these to your shell (~/.bashrc or ~/.zshrc):")
@@ -76,6 +95,58 @@ func runConfig() int {
 		fmt.Fprintf(os.Stderr, "      export PDCP_API_KEY=%s   # enables ASN (asnmap)\n", chaos)
 	}
 	return 0
+}
+
+// parseProviderConfig reads subfinder's provider-config.yaml into provider->values.
+// The format is simple enough (`name:` then `  - value` lines) to parse by hand,
+// avoiding a YAML dependency. Missing file → empty map (fresh setup).
+func parseProviderConfig(path string) map[string][]string {
+	cfg := map[string][]string{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cfg
+	}
+	cur := ""
+	for _, ln := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(ln)
+		switch {
+		case t == "" || strings.HasPrefix(t, "#"):
+		case strings.HasPrefix(t, "- "):
+			if cur != "" {
+				cfg[cur] = append(cfg[cur], strings.TrimSpace(t[2:]))
+			}
+		case strings.HasSuffix(t, ":"):
+			cur = strings.TrimSuffix(t, ":")
+			if _, ok := cfg[cur]; !ok {
+				cfg[cur] = nil
+			}
+		}
+	}
+	return cfg
+}
+
+// mask shows a key's shape without printing it in full: 3527…4178.
+func mask(s string) string {
+	if len(s) <= 8 {
+		return strings.Repeat("*", len(s))
+	}
+	return s[:4] + "…" + s[len(s)-4:]
+}
+
+func sortedProviders(m map[string][]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+func first(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
 }
 
 type tool struct {
